@@ -1430,6 +1430,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hc-geom"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
