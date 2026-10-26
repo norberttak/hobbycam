@@ -1,0 +1,170 @@
+{
+  "format_version": 1,
+  "units": "mm",
+  "stock": {
+    "min_x": 0.0,
+    "min_y": 0.0,
+    "width": 100.0,
+    "height": 100.0,
+    "thickness": 10.0,
+    "origin": "drawing_origin"
+  },
+  "machine": {
+    "safe_z": 5.0,
+    "clearance_z": 2.0,
+    "post": "linuxcnc"
+  },
+  "layers": [
+    {
+      "name": "0",
+      "color": 7
+    }
+  ],
+  "items": [
+    {
+      "id": 1,
+      "layer": "0",
+      "source": {
+        "type": "drawn"
+      },
+      "geom": {
+        "type": "contour",
+        "segments": [
+          {
+            "type": "line",
+            "start": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "end": {
+              "x": 10.0,
+              "y": 0.0
+            }
+          },
+          {
+            "type": "line",
+            "start": {
+              "x": 10.0,
+              "y": 0.0
+            },
+            "end": {
+              "x": 10.0,
+              "y": 10.0
+            }
+          },
+          {
+            "type": "line",
+            "start": {
+              "x": 10.0,
+              "y": 10.0
+            },
+            "end": {
+              "x": 0.0,
+              "y": 10.0
+            }
+          },
+          {
+            "type": "line",
+            "start": {
+              "x": 0.0,
+              "y": 10.0
+            },
+            "end": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          }
+        ],
+        "closed": true
+      }
+    },
+    {
+      "id": 2,
+      "layer": "0",
+      "source": {
+        "type": "drawn"
+      },
+      "geom": {
+        "type": "point",
+        "x": 5.0,
+        "y": 5.0
+      }
+    }
+  ],
+  "tools": [
+    {
+      "id": 1,
+      "name": "Flat 1/8\"",
+      "kind": {
+        "type": "flat_end_mill"
+      },
+      "diameter": 3.175,
+      "flute_length": 12.0,
+      "flutes": 2,
+      "feed": 600.0,
+      "plunge_feed": 150.0,
+      "rpm": 16000,
+      "depth_per_pass": 0.8,
+      "stepover_pct": 45.0,
+      "comment": "2 flute carbide"
+    }
+  ],
+  "operations": [
+    {
+      "id": 3,
+      "name": "Cut out",
+      "enabled": true,
+      "tool": 1,
+      "items": [
+        1
+      ],
+      "kind": {
+        "type": "contour",
+        "side": "outside",
+        "direction": "climb"
+      },
+      "depth": 6.0,
+      "depth_per_pass": 0.8,
+      "feed": 600.0,
+      "plunge_feed": 150.0,
+      "rpm": 16000,
+      "tabs": {
+        "enabled": true,
+        "placement": {
+          "type": "count",
+          "count": 4
+        },
+        "width": 5.0,
+        "height": 1.0
+      }
+    },
+    {
+      "id": 4,
+      "name": "Center hole",
+      "enabled": true,
+      "tool": 1,
+      "items": [
+        2
+      ],
+      "kind": {
+        "type": "drill",
+        "peck": 1.5
+      },
+      "depth": 6.0,
+      "depth_per_pass": 0.8,
+      "feed": 600.0,
+      "plunge_feed": 150.0,
+      "rpm": 16000,
+      "tabs": {
+        "enabled": false,
+        "placement": {
+          "type": "count",
+          "count": 4
+        },
+        "width": 5.0,
+        "height": 1.0
+      }
+    }
+  ],
+  "next_id": 5
+}

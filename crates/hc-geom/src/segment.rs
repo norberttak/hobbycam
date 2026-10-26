@@ -4,6 +4,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// A contour piece: straight line or circular arc.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Segment {
     Line {
         start: Point,
