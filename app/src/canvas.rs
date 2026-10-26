@@ -1,0 +1,250 @@
+//! Drawing canvas: input (pan/zoom/select) and painting.
+
+use crate::hit::segment_points;
+use crate::view::grid_step;
+use crate::{aci, App};
+use eframe::egui::{
+    self, Color32, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui,
+    Vec2,
+};
+use hc_geom::{BBox, Point};
+use hc_project::Geom;
+
+const PICK_PX: f64 = 6.0;
+const ARC_TOL_PX: f64 = 0.25;
+const BOX_MIN_PX: f32 = 4.0;
+const WHEEL_ZOOM: f32 = 1.2;
+const SELECTED: Color32 = Color32::from_rgb(255, 140, 0);
+
+pub fn show(app: &mut App, ui: &mut Ui) {
+    let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+    let rect = resp.rect;
+    painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    if app.state.fit_pending && rect.width() > 1.0 && rect.height() > 1.0 {
+        let (b, s) = (app.state.items_bbox(), app.state.stock_bbox());
+        app.state.view.fit(rect, &b, &s);
+        app.state.fit_pending = false;
+    }
+    input(app, ui, &resp);
+    paint(app, ui, &painter.with_clip_rect(rect), rect);
+}
+
+fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
+    let rect = resp.rect;
+    let s = &mut app.state;
+    let hover = resp.hover_pos();
+    s.cursor = hover.map(|p| s.view.screen_to_world(rect, p));
+    let space = ui.input(|i| i.key_down(egui::Key::Space));
+    let shift = ui.input(|i| i.modifiers.shift);
+
+    // pan
+    if resp.dragged_by(PointerButton::Middle) || (space && resp.dragged_by(PointerButton::Primary))
+    {
+        s.view.offset += resp.drag_delta();
+    }
+
+    if let Some(p) = hover {
+        let events = ui.input(|i| i.events.clone());
+        for e in events {
+            if let egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } = e
+            {
+                if modifiers.command || modifiers.ctrl {
+                    continue; // handled by zoom_delta below
+                }
+                match unit {
+                    MouseWheelUnit::Point => s.view.offset += delta,
+                    _ => s.view.zoom_at(rect, p, WHEEL_ZOOM.powf(delta.y)),
+                }
+            }
+        }
+        let zd = ui.input(|i| i.zoom_delta());
+        if (zd - 1.0).abs() > f32::EPSILON {
+            s.view.zoom_at(rect, p, zd);
+        }
+        if !ui.ctx().egui_wants_keyboard_input() {
+            if ui.input(|i| i.key_pressed(egui::Key::F)) {
+                s.fit_pending = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                s.clear_selection();
+            }
+        }
+    }
+
+    let zoom = s.view.zoom as f64;
+    if resp.clicked_by(PointerButton::Primary) && !space {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let w = s.view.screen_to_world(rect, p);
+            s.click_select(w, PICK_PX / zoom, shift);
+        }
+    }
+    if resp.drag_started_by(PointerButton::Primary) && !space {
+        app.box_start = ui.input(|i| i.pointer.press_origin());
+    }
+    if resp.drag_stopped() {
+        if let (Some(a), Some(b)) = (app.box_start.take(), resp.interact_pointer_pos()) {
+            if (b - a).length() > BOX_MIN_PX {
+                let (wa, wb) = (
+                    s.view.screen_to_world(rect, a),
+                    s.view.screen_to_world(rect, b),
+                );
+                s.box_select(wa, wb, shift, ARC_TOL_PX / zoom);
+            }
+        }
+    }
+    if !resp.dragged() && !resp.drag_stopped() {
+        app.box_start = None;
+    }
+}
+
+fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
+    let s = &app.state;
+    let v = &s.view;
+    let dark = ui.visuals().dark_mode;
+    let vis = v.visible_world(rect);
+
+    // grid
+    let step = grid_step(v.zoom, s.project.units, 15.0);
+    let weak = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    let light = Stroke::new(1.0, weak.gamma_multiply(0.4));
+    let strong = Stroke::new(1.0, weak);
+    let i0 = (vis.min.x / step).floor() as i64;
+    let i1 = (vis.max.x / step).ceil() as i64;
+    for i in i0..=i1 {
+        let x = v.world_to_screen(rect, Point::new(i as f64 * step, 0.0)).x;
+        let st = if i % 10 == 0 { strong } else { light };
+        painter.line_segment([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)], st);
+    }
+    let j0 = (vis.min.y / step).floor() as i64;
+    let j1 = (vis.max.y / step).ceil() as i64;
+    for j in j0..=j1 {
+        let y = v.world_to_screen(rect, Point::new(0.0, j as f64 * step)).y;
+        let st = if j % 10 == 0 { strong } else { light };
+        painter.line_segment([Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)], st);
+    }
+    let o = v.world_to_screen(rect, Point::new(0.0, 0.0));
+    let red = Color32::from_rgb(220, 50, 50);
+    let green = Color32::from_rgb(40, 170, 40);
+    painter.line_segment(
+        [Pos2::new(rect.min.x, o.y), Pos2::new(rect.max.x, o.y)],
+        Stroke::new(1.0, red.gamma_multiply(0.6)),
+    );
+    painter.line_segment(
+        [Pos2::new(o.x, rect.min.y), Pos2::new(o.x, rect.max.y)],
+        Stroke::new(1.0, green.gamma_multiply(0.6)),
+    );
+
+    // stock
+    let sb = s.stock_bbox();
+    let corners = [
+        sb.min,
+        Point::new(sb.max.x, sb.min.y),
+        sb.max,
+        Point::new(sb.min.x, sb.max.y),
+        sb.min,
+    ]
+    .map(|p| v.world_to_screen(rect, p));
+    painter.extend(Shape::dashed_line(
+        &corners,
+        Stroke::new(1.0, Color32::GRAY),
+        6.0,
+        4.0,
+    ));
+
+    // origin marker
+    painter.arrow(o, Vec2::new(20.0, 0.0), Stroke::new(2.0, red));
+    painter.arrow(o, Vec2::new(0.0, -20.0), Stroke::new(2.0, green));
+
+    // items: normal, then selected on top
+    let tol = ARC_TOL_PX / v.zoom as f64;
+    let margin = 2.0 / v.zoom as f64;
+    let in_view = |b: &BBox| {
+        !b.is_empty()
+            && b.max.x >= vis.min.x - margin
+            && b.min.x <= vis.max.x + margin
+            && b.max.y >= vis.min.y - margin
+            && b.min.y <= vis.max.y + margin
+    };
+    for selected in [false, true] {
+        for (it, b) in s.project.items.iter().zip(&s.item_bbox) {
+            if selected != s.selection.contains(&it.id) || !s.is_visible(it) || !in_view(b) {
+                continue;
+            }
+            let stroke = if selected {
+                Stroke::new(2.5, SELECTED)
+            } else {
+                let c = s
+                    .project
+                    .layers
+                    .iter()
+                    .find(|l| l.name == it.layer)
+                    .map_or(7, |l| l.color);
+                Stroke::new(1.0, aci::aci_rgb(c, dark))
+            };
+            let px = (b.width().max(b.height()) * v.zoom as f64) as f32;
+            match &it.geom {
+                Geom::Point(p) => {
+                    let c = v.world_to_screen(rect, *p);
+                    painter
+                        .line_segment([c - Vec2::new(4.0, 0.0), c + Vec2::new(4.0, 0.0)], stroke);
+                    painter
+                        .line_segment([c - Vec2::new(0.0, 4.0), c + Vec2::new(0.0, 4.0)], stroke);
+                }
+                Geom::Contour(_) if px < 2.0 => {
+                    let c = v.world_to_screen(
+                        rect,
+                        Point::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0),
+                    );
+                    painter.circle_filled(c, stroke.width.max(1.0), stroke.color);
+                }
+                Geom::Contour(c) => {
+                    let mut pts: Vec<Pos2> = Vec::new();
+                    for seg in &c.segments {
+                        let sp = segment_points(seg, tol);
+                        // skip the joint point shared with the previous segment
+                        let skip = usize::from(!pts.is_empty());
+                        pts.extend(
+                            sp.into_iter()
+                                .skip(skip)
+                                .map(|p| v.world_to_screen(rect, p)),
+                        );
+                    }
+                    if c.closed {
+                        pts.pop(); // closed_line adds the closing edge
+                        painter.add(Shape::closed_line(pts, stroke));
+                    } else {
+                        painter.add(Shape::line(pts, stroke));
+                    }
+                }
+            }
+        }
+    }
+
+    // selection box
+    if let (Some(a), Some(b)) = (app.box_start, ui.input(|i| i.pointer.latest_pos())) {
+        if (b - a).length() > BOX_MIN_PX {
+            let r = Rect::from_two_pos(a, b);
+            if b.x >= a.x {
+                let blue = Color32::from_rgb(60, 120, 255);
+                painter.rect_filled(r, 0.0, blue.gamma_multiply(0.1));
+                painter.rect_stroke(r, 0.0, Stroke::new(1.0, blue), egui::StrokeKind::Inside);
+            } else {
+                let green = Color32::from_rgb(40, 180, 80);
+                painter.rect_filled(r, 0.0, green.gamma_multiply(0.1));
+                let pts = [
+                    r.left_top(),
+                    r.right_top(),
+                    r.right_bottom(),
+                    r.left_bottom(),
+                    r.left_top(),
+                ];
+                painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, green), 5.0, 4.0));
+            }
+        }
+    }
+}
