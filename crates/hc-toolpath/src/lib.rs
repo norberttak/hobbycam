@@ -1,16 +1,22 @@
 //! Operations -> toolpaths (move lists). Units mm and mm/min, Z0 = stock top, cutting Z negative.
 
 mod offset;
+mod tabs;
 
 pub use offset::{offset_closed, pocket_rings};
+pub use tabs::tab_positions;
 
 use hc_geom::{containment_tree, Contour, Orientation, Point, Segment};
-use hc_project::{Direction, Geom, Machine, OpKind, Operation, Project, Side, Tool};
+use hc_project::{Direction, Geom, Machine, OpKind, Operation, Project, Side, TabPlacement, Tool};
 use offset::{split_large_arcs, MAX_LEVELS};
 use std::fmt;
+use tabs::Intervals;
+
+/// (lifted intervals, z_tab, plunge_feed) for `cut_pass`.
+type Lift<'a> = (&'a [(f64, f64)], f64, f64);
 
 /// Positions closer than this (mm) count as the same point.
-const POS_TOL: f64 = 1e-6;
+pub(crate) const POS_TOL: f64 = 1e-6;
 /// Upper limit for depth/depth_per_pass and the number of pocket levels.
 const MAX_PASSES: f64 = MAX_LEVELS as f64;
 
@@ -60,6 +66,32 @@ pub struct Toolpath {
     pub tool_id: u32,
     pub rpm: u32,
     pub moves: Vec<Move>,
+    /// Non-fatal remarks (M8 turns them into warnings).
+    pub notes: Vec<ToolpathNote>,
+}
+
+/// Something the user should know about a toolpath that was still generated.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolpathNote {
+    TabsReduced {
+        item: u64,
+        placed: usize,
+        requested: usize,
+    },
+    TabsOnOpenContour(u64),
+}
+
+impl fmt::Display for ToolpathNote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ToolpathNote::TabsReduced {
+                item,
+                placed,
+                requested,
+            } => write!(f, "Item {item}: only {placed} of {requested} tabs fit"),
+            ToolpathNote::TabsOnOpenContour(item) => write!(f, "Item {item} is open: no tabs"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,11 +169,31 @@ fn validate(m: &Machine, op: &Operation) -> Result<(), ToolpathError> {
     }
     match op.kind {
         OpKind::Pocket { stepover_pct } if bad(stepover_pct) || stepover_pct > 100.0 => {
-            Err(E("stepover_pct"))
+            return Err(E("stepover_pct"))
         }
-        OpKind::Drill { peck: Some(p) } if bad(p) => Err(E("peck")),
-        _ => Ok(()),
+        OpKind::Drill { peck: Some(p) } if bad(p) => return Err(E("peck")),
+        _ => {}
     }
+    let t = &op.tabs;
+    if matches!(op.kind, OpKind::Contour { .. }) && t.enabled {
+        if bad(t.width) {
+            return Err(E("tab_width"));
+        }
+        if bad(t.height) {
+            return Err(E("tab_height"));
+        }
+        if matches!(t.placement, TabPlacement::Spacing { distance } if bad(distance)) {
+            return Err(E("tab_spacing"));
+        }
+        if t.manual
+            .iter()
+            .flat_map(|m| &m.positions)
+            .any(|p| !p.is_finite())
+        {
+            return Err(E("tabs"));
+        }
+    }
+    Ok(())
 }
 
 /// One feature: the moves after `Rapid(start @ safe_z)`, ending at `end`.
@@ -183,9 +235,10 @@ pub fn generate_op(project: &Project, op: &Operation) -> Result<Toolpath, Toolpa
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let mut notes = Vec::new();
     let features = match op.kind {
         OpKind::Drill { peck } => drill_features(m, op, peck, &items)?,
-        _ => cut_features(m, op, tool, &items)?,
+        _ => cut_features(m, op, tool, &items, &mut notes)?,
     };
 
     let mut moves = Vec::new();
@@ -201,6 +254,7 @@ pub fn generate_op(project: &Project, op: &Operation) -> Result<Toolpath, Toolpa
         tool_id: op.tool,
         rpm: op.rpm,
         moves,
+        notes,
     })
 }
 
@@ -264,6 +318,7 @@ fn cut_features(
     op: &Operation,
     tool: &Tool,
     items: &[(u64, &Geom)],
+    notes: &mut Vec<ToolpathNote>,
 ) -> Result<Vec<Feature>, ToolpathError> {
     let mut contours: Vec<(u64, &Contour)> = Vec::with_capacity(items.len());
     for &(id, g) in items {
@@ -279,12 +334,13 @@ fn cut_features(
     let all: Vec<Contour> = contours.iter().map(|(_, c)| (*c).clone()).collect();
     let tree = containment_tree(&all);
 
-    // (containment depth, paths)
-    let mut groups: Vec<(usize, Vec<Contour>)> = Vec::new();
+    // (containment depth, paths with their lifted tab intervals)
+    let mut groups: Vec<(usize, Vec<(Contour, Intervals)>)> = Vec::new();
+    let no_tabs = |paths: Vec<Contour>| paths.into_iter().map(|p| (p, Vec::new())).collect();
     match op.kind {
         OpKind::Engrave => {
             for (k, (_, c)) in contours.iter().enumerate() {
-                groups.push((tree[k].depth, vec![(*c).clone()]));
+                groups.push((tree[k].depth, no_tabs(vec![(*c).clone()])));
             }
         }
         OpKind::Contour { side, direction } => {
@@ -318,6 +374,16 @@ fn cut_features(
                             .collect()
                     }
                 };
+                let paths = if !op.tabs.enabled {
+                    no_tabs(paths)
+                } else if !c.closed {
+                    notes.push(ToolpathNote::TabsOnOpenContour(id));
+                    no_tabs(paths)
+                } else {
+                    let (pos, note) = tab_positions(c, &op.tabs, id, tool.diameter);
+                    notes.extend(note);
+                    tabs::lift_paths(c, &pos, paths, op.tabs.width + tool.diameter)?
+                };
                 groups.push((tree[k].depth, paths));
             }
         }
@@ -344,7 +410,10 @@ fn cut_features(
                     return Err(ToolpathError::OffsetVanished(id));
                 }
                 // innermost level first, the wall ring last
-                groups.push((tree[k].depth, levels.into_iter().rev().flatten().collect()));
+                groups.push((
+                    tree[k].depth,
+                    no_tabs(levels.into_iter().rev().flatten().collect()),
+                ));
             }
         }
         OpKind::Drill { .. } => unreachable!("drill handled by drill_features"),
@@ -354,11 +423,15 @@ fn cut_features(
     Ok(groups
         .into_iter()
         .map(|(depth, paths)| {
-            let paths: Vec<Contour> = paths.iter().map(split_large_arcs).collect();
-            let mut moves = vec![Move::Rapid(Point3::at(paths[0].start(), m.clearance_z))];
+            let paths: Vec<(Contour, Vec<(f64, f64)>)> = paths
+                .iter()
+                .map(|(c, iv)| (split_large_arcs(c), iv.clone()))
+                .collect();
+            let start = paths[0].0.start();
+            let mut moves = vec![Move::Rapid(Point3::at(start, m.clearance_z))];
             let end = emit_levels(&mut moves, &paths, &levels, m, op);
             Feature {
-                start: paths[0].start(),
+                start,
                 end,
                 depth,
                 moves,
@@ -382,16 +455,18 @@ fn oriented(mut c: Contour, climb: bool, climb_dir: Orientation) -> Contour {
 /// All depth levels of one feature, starting at paths[0].start() @ clearance_z. Returns the end XY.
 fn emit_levels(
     out: &mut Vec<Move>,
-    paths: &[Contour],
+    paths: &[(Contour, Vec<(f64, f64)>)],
     levels: &[f64],
     m: &Machine,
     op: &Operation,
 ) -> Point {
-    let mut pos = paths[0].start();
+    let mut pos = paths[0].0.start();
     // a single open path zig-zags: every level runs back from where the previous one ended
-    let zigzag = paths.len() == 1 && !paths[0].closed;
+    let zigzag = paths.len() == 1 && !paths[0].0.closed;
+    // h > depth: the tab reaches the stock top, never lift above Z0 (M8 warns)
+    let z_tab = (-op.depth + op.tabs.height).min(0.0);
     for (i, &z) in levels.iter().enumerate() {
-        for path in paths {
+        for (path, iv) in paths {
             let mut path = path.clone();
             if zigzag && i % 2 == 1 {
                 path.reverse();
@@ -406,25 +481,51 @@ fn emit_levels(
                 to: Point3::at(start, z),
                 feed: op.plunge_feed,
             });
-            cut_pass(out, &path, z, op.feed);
+            cut_pass(out, &path, z, op.feed, Some((iv, z_tab, op.plunge_feed)));
             pos = path.end();
         }
     }
     pos
 }
 
-/// All contour/pocket cutting at one Z goes through here (M6 tabs hook).
-fn cut_pass(out: &mut Vec<Move>, path: &Contour, z: f64, feed: f64) {
-    for s in &path.segments {
-        let to = Point3::at(s.end(), z);
-        out.push(match *s {
-            Segment::Line { .. } => Move::Linear { to, feed },
-            Segment::Arc { center, sweep, .. } => Move::Arc {
-                to,
-                center,
-                ccw: sweep > 0.0,
-                feed,
-            },
+fn seg_move(s: &Segment, z: f64, feed: f64) -> Move {
+    let to = Point3::at(s.end(), z);
+    match *s {
+        Segment::Line { .. } => Move::Linear { to, feed },
+        Segment::Arc { center, sweep, .. } => Move::Arc {
+            to,
+            center,
+            ccw: sweep > 0.0,
+            feed,
+        },
+    }
+}
+
+/// All contour/pocket cutting at one Z goes through here. `lift` = (intervals, z_tab, plunge_feed):
+/// a pass below z_tab goes straight up to z_tab over each interval and straight back down after it.
+fn cut_pass(out: &mut Vec<Move>, path: &Contour, z: f64, feed: f64, lift: Option<Lift<'_>>) {
+    let Some((iv, z_tab, plunge)) = lift.filter(|&(iv, zt, _)| !iv.is_empty() && z < zt - 1e-9)
+    else {
+        out.extend(path.segments.iter().map(|s| seg_move(s, z, feed)));
+        return;
+    };
+    // shortcut: rectangular tabs (vertical up/down at plunge feed), replace with a ramp of length h/tan(angle) inside the gap when ramped tabs are wanted
+    let mut up = false;
+    for (piece, lifted) in tabs::split_pieces(path, iv) {
+        if lifted != up {
+            up = lifted;
+            let to_z = if up { z_tab } else { z };
+            out.push(Move::Linear {
+                to: Point3::at(piece.start(), to_z),
+                feed: plunge,
+            });
+        }
+        out.push(seg_move(&piece, if up { z_tab } else { z }, feed));
+    }
+    if up {
+        out.push(Move::Linear {
+            to: Point3::at(path.end(), z),
+            feed: plunge,
         });
     }
 }

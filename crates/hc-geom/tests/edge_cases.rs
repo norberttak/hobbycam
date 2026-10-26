@@ -622,3 +622,123 @@ fn chained_gaps_area_independent_of_position() {
         assert!(close(a, 100.0, 0.2), "offset {b}: |area| = {a}");
     }
 }
+
+// ---------------------------------------------------------------- M6 arc-length helpers
+
+#[test]
+fn m6_split_at_ends_and_epsilon() {
+    let l = line(0.0, 0.0, 10.0, 0.0);
+    let a = arc(0.0, 0.0, 10.0, 0.0, -FRAC_PI_2);
+    for s in [l, a] {
+        let len = s.length();
+        for d in [0.0, 1e-9, 1e-6, len - 1e-6, len - 1e-9, len] {
+            let (h, t) = s.split_at(d);
+            assert!(h.start().approx_eq(s.start(), T), "{s:?} d {d}");
+            assert!(t.end().approx_eq(s.end(), 1e-9), "{s:?} d {d}");
+            assert!(h.end().approx_eq(t.start(), 1e-9));
+            assert!(close(h.length(), d, 1e-9), "{s:?} d {d}: {}", h.length());
+            assert!(close(h.length() + t.length(), len, 1e-9));
+        }
+        // outside the documented range: clamped, never NaN
+        for d in [-5.0, len + 5.0] {
+            let (h, t) = s.split_at(d);
+            assert!(h.start().x.is_finite() && t.end().x.is_finite());
+            assert!(close(h.length() + t.length(), len, 1e-9), "{s:?} d {d}");
+            assert!(t.end().approx_eq(s.end(), 1e-9));
+        }
+    }
+    // arc pieces keep center and radius exactly, sweep signs follow the parent
+    let (h, t) = a.split_at(3.0);
+    for piece in [h, t] {
+        let Segment::Arc {
+            center,
+            radius,
+            sweep,
+            ..
+        } = piece
+        else {
+            panic!()
+        };
+        assert_eq!(center, p(0.0, 0.0));
+        assert_eq!(radius, 10.0);
+        assert!(sweep < 0.0);
+    }
+    // full circle split
+    let full = Circle {
+        center: p(1.0, 2.0),
+        radius: 3.0,
+    }
+    .to_contour()
+    .segments[0];
+    let (h, t) = full.split_at(full.length() / 4.0);
+    assert!(close(h.length(), 1.5 * PI, 1e-9) && close(t.length(), 4.5 * PI, 1e-9));
+    assert!(t.end().approx_eq(full.start(), 1e-9));
+}
+
+#[test]
+fn m6_point_at_beyond_and_degenerate() {
+    let l = line(0.0, 0.0, 3.0, 4.0);
+    assert!(l.point_at(1e9).approx_eq(p(3.0, 4.0), T));
+    assert!(l.point_at(-1e9).approx_eq(p(0.0, 0.0), T));
+    assert!(l.point_at(2.5).approx_eq(p(1.5, 2.0), T));
+    let z = line(1.0, 1.0, 1.0, 1.0);
+    assert!(z.point_at(5.0).approx_eq(p(1.0, 1.0), T));
+    assert_eq!(z.closest(p(9.0, 9.0)), 0.0);
+    let c = Contour::from_bulge_vertices(
+        &[
+            (p(0.0, 0.0), 0.0),
+            (p(10.0, 0.0), 0.0),
+            (p(10.0, 10.0), 0.0),
+        ],
+        false,
+    );
+    assert!(c.point_at(1e9).approx_eq(p(10.0, 10.0), T));
+    assert!(c.point_at(10.0).approx_eq(p(10.0, 0.0), T));
+    let mut closed = c.clone();
+    closed.closed = true;
+    closed.segments.push(line(10.0, 10.0, 0.0, 0.0));
+    let len = closed.length();
+    assert!(closed.point_at(len).approx_eq(p(0.0, 0.0), 1e-9));
+    assert!(closed.point_at(-len).approx_eq(p(0.0, 0.0), 1e-9));
+    assert!(closed
+        .point_at(3.0 * len + 5.0)
+        .approx_eq(p(5.0, 0.0), 1e-9));
+}
+
+#[test]
+fn m6_closest_round_trip_and_ties() {
+    // point_at(closest(q)) is the nearest point; round trip for points on the contour
+    let c = Contour::from_bulge_vertices(
+        &[
+            (p(0.0, 0.0), 0.0),
+            (p(20.0, 0.0), 1.0), // semicircle bulge
+            (p(20.0, 10.0), 0.0),
+            (p(0.0, 10.0), 0.0),
+        ],
+        true,
+    );
+    let len = c.length();
+    for k in 0..50 {
+        let s = len * k as f64 / 50.0;
+        let q = c.point_at(s);
+        let (s2, d) = c.closest(q);
+        assert!(d < 1e-9, "s {s}: d {d}");
+        assert!(c.point_at(s2).approx_eq(q, 1e-9));
+    }
+    // a point equidistant from two segments: the first one wins
+    let sq = Contour::from_bulge_vertices(
+        &[
+            (p(0.0, 0.0), 0.0),
+            (p(10.0, 0.0), 0.0),
+            (p(10.0, 10.0), 0.0),
+            (p(0.0, 10.0), 0.0),
+        ],
+        true,
+    );
+    let (s, d) = sq.closest(p(5.0, 5.0));
+    assert!(close(s, 5.0, 1e-9) && close(d, 5.0, 1e-9));
+    // distance_to agrees with closest
+    for q in [p(-3.0, 4.0), p(25.0, 5.0), p(7.0, 7.0)] {
+        assert!(close(c.distance_to(q), c.closest(q).1, 1e-12));
+    }
+}

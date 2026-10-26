@@ -72,15 +72,72 @@ impl Segment {
 
     /// Shortest distance from `p` to the segment.
     pub fn distance_to(&self, p: Point) -> f64 {
+        p.distance(self.point_at(self.closest(p)))
+    }
+
+    /// Point at distance `d` from the start along the segment; `d` is clamped to [0, length].
+    pub fn point_at(&self, d: f64) -> Point {
+        let len = self.length();
+        if len < EPS {
+            return self.start();
+        }
+        let f = (d / len).clamp(0.0, 1.0);
+        match *self {
+            Segment::Line { start, end } => start + (end - start) * f,
+            Segment::Arc {
+                center,
+                radius,
+                start_angle,
+                sweep,
+            } => circle_point(center, radius, start_angle + sweep * f),
+        }
+    }
+
+    /// Split at distance `d` from the start (0 < d < length). An arc gives two arcs on the same circle.
+    pub fn split_at(&self, d: f64) -> (Segment, Segment) {
+        match *self {
+            Segment::Line { start, end } => {
+                let m = self.point_at(d);
+                (
+                    Segment::Line { start, end: m },
+                    Segment::Line { start: m, end },
+                )
+            }
+            Segment::Arc {
+                center,
+                radius,
+                start_angle,
+                sweep,
+            } => {
+                let s1 = sweep * (d / self.length()).clamp(0.0, 1.0);
+                (
+                    Segment::Arc {
+                        center,
+                        radius,
+                        start_angle,
+                        sweep: s1,
+                    },
+                    Segment::Arc {
+                        center,
+                        radius,
+                        start_angle: start_angle + s1,
+                        sweep: sweep - s1,
+                    },
+                )
+            }
+        }
+    }
+
+    /// Distance along the segment (from its start) of the point nearest to `p`.
+    pub fn closest(&self, p: Point) -> f64 {
         match *self {
             Segment::Line { start, end } => {
                 let d = end - start;
                 let len2 = d.dot(d);
                 if len2 < EPS {
-                    return p.distance(start);
+                    return 0.0;
                 }
-                let t = ((p - start).dot(d) / len2).clamp(0.0, 1.0);
-                p.distance(start + d * t)
+                ((p - start).dot(d) / len2).clamp(0.0, 1.0) * len2.sqrt()
             }
             Segment::Arc {
                 center,
@@ -95,10 +152,14 @@ impl Segment {
                 } else {
                     (start_angle - ang).rem_euclid(TAU)
                 };
-                if off <= sweep.abs() || sweep.abs() >= TAU - EPS {
-                    (v.length() - radius).abs()
+                if off <= sweep.abs() {
+                    off * radius
+                } else if sweep.abs() >= TAU - EPS
+                    || p.distance(self.start()) <= p.distance(self.end())
+                {
+                    0.0
                 } else {
-                    p.distance(self.start()).min(p.distance(self.end()))
+                    self.length()
                 }
             }
         }
@@ -406,5 +467,110 @@ mod tests {
         assert!(r.start().approx_eq(a.end(), T));
         assert!(r.end().approx_eq(a.start(), T));
         assert!((r.length() - a.length()).abs() < T);
+    }
+
+    #[test]
+    fn point_at_line_and_arc() {
+        let l = Segment::Line {
+            start: p(0.0, 0.0),
+            end: p(10.0, 0.0),
+        };
+        assert!(l.point_at(4.0).approx_eq(p(4.0, 0.0), T));
+        assert!(l.point_at(-1.0).approx_eq(p(0.0, 0.0), T));
+        assert!(l.point_at(11.0).approx_eq(p(10.0, 0.0), T));
+        let a = Segment::Arc {
+            center: p(0.0, 0.0),
+            radius: 10.0,
+            start_angle: 0.0,
+            sweep: -FRAC_PI_2,
+        };
+        assert!(a.point_at(a.length()).approx_eq(p(0.0, -10.0), T));
+        assert!(a
+            .point_at(a.length() / 2.0)
+            .approx_eq(p(10.0 * FRAC_PI_4.cos(), -10.0 * FRAC_PI_4.sin()), T));
+    }
+
+    #[test]
+    fn m6_01_split_at() {
+        let l = Segment::Line {
+            start: p(0.0, 0.0),
+            end: p(10.0, 0.0),
+        };
+        let (a, b) = l.split_at(4.0);
+        assert_eq!(
+            a,
+            Segment::Line {
+                start: p(0.0, 0.0),
+                end: p(4.0, 0.0)
+            }
+        );
+        assert_eq!(
+            b,
+            Segment::Line {
+                start: p(4.0, 0.0),
+                end: p(10.0, 0.0)
+            }
+        );
+        let arc = Segment::Arc {
+            center: p(0.0, 0.0),
+            radius: 10.0,
+            start_angle: 0.0,
+            sweep: FRAC_PI_2,
+        };
+        let (a, b) = arc.split_at(5.0 * PI / 2.0);
+        let (
+            Segment::Arc {
+                sweep: s1,
+                radius: r1,
+                ..
+            },
+            Segment::Arc {
+                sweep: s2,
+                start_angle: a2,
+                center: c2,
+                ..
+            },
+        ) = (a, b)
+        else {
+            panic!("expected arcs")
+        };
+        assert!((s1 - FRAC_PI_4).abs() < 1e-6 && (s2 - FRAC_PI_4).abs() < 1e-6);
+        assert!((r1 - 10.0).abs() < T && c2.approx_eq(p(0.0, 0.0), T));
+        assert!(a.end().approx_eq(p(7.071068, 7.071068), 1e-6));
+        assert!((a2 - FRAC_PI_4).abs() < 1e-6);
+        // CW arc
+        let cw = arc.reversed();
+        let (a, b) = cw.split_at(1.0);
+        assert!((a.length() - 1.0).abs() < T && a.end().approx_eq(b.start(), T));
+        assert!(b.end().approx_eq(cw.end(), T));
+    }
+
+    #[test]
+    fn closest_line_and_arc() {
+        let l = Segment::Line {
+            start: p(0.0, 0.0),
+            end: p(10.0, 0.0),
+        };
+        assert!((l.closest(p(3.0, 5.0)) - 3.0).abs() < T);
+        assert!(l.closest(p(-3.0, 5.0)).abs() < T);
+        assert!((l.closest(p(13.0, 5.0)) - 10.0).abs() < T);
+        let a = Segment::Arc {
+            center: p(0.0, 0.0),
+            radius: 10.0,
+            start_angle: 0.0,
+            sweep: FRAC_PI_2,
+        };
+        assert!((a.closest(p(5.0, 5.0)) - 10.0 * FRAC_PI_4).abs() < T);
+        assert!(a.closest(p(5.0, -1.0)).abs() < T); // nearer the start
+        assert!((a.closest(p(-1.0, 5.0)) - a.length()).abs() < T); // nearer the end
+        let cw = a.reversed();
+        assert!((cw.closest(p(5.0, 5.0)) - 10.0 * FRAC_PI_4).abs() < T);
+        let full = Circle {
+            center: p(0.0, 0.0),
+            radius: 2.0,
+        }
+        .to_contour()
+        .segments[0];
+        assert!((full.closest(p(0.0, -5.0)) - 3.0 * PI).abs() < T);
     }
 }

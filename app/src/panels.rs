@@ -3,7 +3,9 @@
 use crate::state::{kind_label, MoveDir, NewKind, Severity};
 use crate::{aci, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
-use hc_project::{from_display, parse_length, to_display, Direction, Geom, OpKind, Side, Units};
+use hc_project::{
+    from_display, parse_length, to_display, Direction, Geom, OpKind, Side, TabPlacement, Units,
+};
 
 #[derive(Clone, Copy)]
 pub enum Quantity {
@@ -260,8 +262,16 @@ fn operations(app: &mut App, ui: &mut Ui) {
                 act = Some(Act::Delete(op.id));
             }
         });
-        if let Some(Err(e)) = app.state.toolpath_result(op.id) {
-            ui.colored_label(ui.visuals().error_fg_color, format!("Error: {e}"));
+        match app.state.toolpath_result(op.id) {
+            Some(Err(e)) => {
+                ui.colored_label(ui.visuals().error_fg_color, format!("Error: {e}"));
+            }
+            Some(Ok(tp)) => {
+                for n in &tp.notes {
+                    ui.colored_label(ui.visuals().warn_fg_color, format!("Note: {n}"));
+                }
+            }
+            None => {}
         }
     }
     match act {
@@ -447,6 +457,10 @@ fn op_props(app: &mut App, ui: &mut Ui, mut op: hc_project::Operation) {
             .labelled_by(l.id);
         ui.end_row();
     });
+    let mut reset = false;
+    if matches!(op.kind, OpKind::Contour { .. }) {
+        reset = tabs_group(ui, &mut op.tabs, u);
+    }
     tool_combo(ui, "op_tool", &mut op.tool, &tools);
     ui.label(format!("{} items", op.items.len()));
     ui.horizontal(|ui| {
@@ -461,6 +475,54 @@ fn op_props(app: &mut App, ui: &mut Ui, mut op: hc_project::Operation) {
     if use_sel {
         app.state.use_selection(id);
     }
+    if reset {
+        app.state.reset_tabs(id);
+    }
+}
+
+/// Tab settings of a Contour op; true when "Reset to auto" was clicked.
+fn tabs_group(ui: &mut Ui, tabs: &mut hc_project::Tabs, u: Units) -> bool {
+    let mut reset = false;
+    ui.group(|ui| {
+        ui.strong("Tabs");
+        ui.checkbox(&mut tabs.enabled, "Tabs enabled");
+        ui.add_enabled_ui(tabs.enabled, |ui| {
+            ui.horizontal(|ui| {
+                let is_count = matches!(tabs.placement, TabPlacement::Count { .. });
+                let r = ui.radio(is_count, "Count");
+                if r.clicked() && !is_count {
+                    tabs.placement = TabPlacement::Count { count: 4 };
+                }
+                if let TabPlacement::Count { count } = &mut tabs.placement {
+                    ui.add(egui::DragValue::new(count).range(0..=100))
+                        .labelled_by(r.id);
+                }
+            });
+            ui.horizontal(|ui| {
+                let is_sp = matches!(tabs.placement, TabPlacement::Spacing { .. });
+                let r = ui.radio(is_sp, "Spacing");
+                if r.clicked() && !is_sp {
+                    tabs.placement = TabPlacement::Spacing { distance: 100.0 };
+                }
+                if let TabPlacement::Spacing { distance } = &mut tabs.placement {
+                    length_field(ui, distance, u, Quantity::Length).labelled_by(r.id);
+                }
+            });
+            egui::Grid::new("tab_props").num_columns(2).show(ui, |ui| {
+                let l = ui.label("Width");
+                length_field(ui, &mut tabs.width, u, Quantity::Length).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Height");
+                length_field(ui, &mut tabs.height, u, Quantity::Length).labelled_by(l.id);
+                ui.end_row();
+            });
+            reset = ui
+                .add_enabled(!tabs.manual.is_empty(), egui::Button::new("Reset to auto"))
+                .clicked();
+            ui.weak("Double-click the contour to add, Del removes");
+        });
+    });
+    reset
 }
 
 fn selection_props(app: &mut App, ui: &mut Ui) {

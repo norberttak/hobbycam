@@ -74,19 +74,58 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 s.clear_selection();
+                s.selected_tab = None;
+            }
+            let del = ui
+                .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+            if let Some((item, idx)) = s.selected_tab.filter(|_| del) {
+                s.delete_tab(item, idx);
             }
         }
     }
 
     let zoom = s.view.zoom as f64;
-    if resp.clicked_by(PointerButton::Primary) && !space {
+    let pick = PICK_PX / zoom;
+    if resp.double_clicked_by(PointerButton::Primary) && !space {
         if let Some(p) = resp.interact_pointer_pos() {
             let w = s.view.screen_to_world(rect, p);
-            s.click_select(w, PICK_PX / zoom, shift);
+            let near = s
+                .tab_markers()
+                .iter()
+                .map(|(id, c, _)| (*id, c.distance_to(w)))
+                .filter(|(_, d)| *d <= pick)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(id, _)| id);
+            if let Some(id) = near {
+                s.add_tab(id, w);
+            }
+        }
+    } else if resp.clicked_by(PointerButton::Primary) && !space {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let w = s.view.screen_to_world(rect, p);
+            s.selected_tab = s.tab_at(w, pick);
+            if s.selected_tab.is_none() {
+                s.click_select(w, pick, shift);
+            }
         }
     }
     if resp.drag_started_by(PointerButton::Primary) && !space {
-        app.box_start = ui.input(|i| i.pointer.press_origin());
+        let origin = ui.input(|i| i.pointer.press_origin());
+        let tab = origin.and_then(|o| s.tab_at(s.view.screen_to_world(rect, o), pick));
+        if tab.is_some() {
+            s.selected_tab = tab;
+            app.tab_drag = true;
+        } else {
+            app.box_start = origin;
+        }
+    }
+    if app.tab_drag {
+        match (s.selected_tab, resp.interact_pointer_pos()) {
+            (Some((item, idx)), Some(p)) if resp.dragged_by(PointerButton::Primary) => {
+                s.move_tab(item, idx, s.view.screen_to_world(rect, p));
+            }
+            _ => app.tab_drag = false,
+        }
     }
     if resp.drag_stopped() {
         if let (Some(a), Some(b)) = (app.box_start.take(), resp.interact_pointer_pos()) {
@@ -230,6 +269,8 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
         }
     }
 
+    tab_markers(s, painter, rect, dark, ui.visuals().text_color());
+
     // selection box
     if let (Some(a), Some(b)) = (app.box_start, ui.input(|i| i.pointer.latest_pos())) {
         if (b - a).length() > BOX_MIN_PX {
@@ -339,5 +380,39 @@ fn toolpaths(s: &AppState, painter: &Painter, rect: Rect, tol: f64, dark: bool) 
             }
         }
         flush(&mut run);
+    }
+}
+
+/// Tab markers of the selected op: a bar of the tab width along the edge plus a dot at the centre.
+/// The selected tab is a larger dot outlined in `outline` (the text colour), so it stands out on a selected contour.
+fn tab_markers(s: &AppState, painter: &Painter, rect: Rect, dark: bool, outline: Color32) {
+    let teal = if dark {
+        Color32::from_rgb(0, 210, 190)
+    } else {
+        Color32::from_rgb(0, 128, 128)
+    };
+    let Some(w) = s
+        .selected_op
+        .and_then(|id| s.project.operations.iter().find(|o| o.id == id))
+        .map(|o| o.tabs.width)
+    else {
+        return;
+    };
+    for (id, c, pos) in s.tab_markers() {
+        let l = c.length();
+        for (i, t) in pos.iter().enumerate() {
+            let at = t.rem_euclid(1.0) * l;
+            let selected = s.selected_tab == Some((id, i));
+            let col = if selected { SELECTED } else { teal };
+            let a = s.view.world_to_screen(rect, c.point_at(at - w / 2.0));
+            let b = s.view.world_to_screen(rect, c.point_at(at + w / 2.0));
+            painter.line_segment([a, b], Stroke::new(4.0, col));
+            let centre = s.view.world_to_screen(rect, c.point_at(at));
+            if selected {
+                painter.circle(centre, 7.0, col, Stroke::new(2.0, outline));
+            } else {
+                painter.circle_filled(centre, 5.0, col);
+            }
+        }
     }
 }

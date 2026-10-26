@@ -3,8 +3,11 @@
 use crate::hit;
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
-use hc_geom::{BBox, Point};
-use hc_project::{Direction, Item, OpKind, Problem, Project, Side, Tool, ToolLibrary, Units};
+use hc_geom::{BBox, Contour, Point};
+use hc_project::{
+    Direction, Geom, Item, ManualTabs, OpKind, Operation, Problem, Project, Side, Tool,
+    ToolLibrary, Units,
+};
 use hc_toolpath::{Toolpath, ToolpathError};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -88,6 +91,8 @@ pub struct AppState {
     pub library_error: Option<String>,
     pub selection: BTreeSet<u64>,
     pub selected_op: Option<u64>,
+    /// (item, index into that item's tab positions) of the selected op.
+    pub selected_tab: Option<(u64, usize)>,
     pub hidden_layers: HashSet<String>,
     pub messages: Vec<Message>,
     pub view: View,
@@ -130,6 +135,7 @@ impl AppState {
             library_error,
             selection: BTreeSet::new(),
             selected_op: None,
+            selected_tab: None,
             hidden_layers: HashSet::new(),
             messages: Vec::new(),
             view: View::default(),
@@ -211,6 +217,7 @@ impl AppState {
         self.dirty = false;
         self.selection.clear();
         self.selected_op = None;
+        self.selected_tab = None;
         self.hidden_layers.clear();
         self.items_changed();
         self.fit_pending = true;
@@ -449,6 +456,7 @@ impl AppState {
             self.selection.iter().copied().collect(),
         );
         self.selected_op = Some(id);
+        self.selected_tab = None;
         self.dirty = true;
         Some(id)
     }
@@ -471,6 +479,7 @@ impl AppState {
         self.project.remove_operation(id);
         if self.selected_op == Some(id) {
             self.selected_op = None;
+            self.selected_tab = None;
         }
         self.dirty = true;
     }
@@ -479,6 +488,9 @@ impl AppState {
     pub fn select_op(&mut self, id: u64) {
         if let Some(op) = self.project.operations.iter().find(|o| o.id == id) {
             self.selection = op.items.iter().copied().collect();
+            if self.selected_op != Some(id) {
+                self.selected_tab = None;
+            }
             self.selected_op = Some(id);
         }
     }
@@ -532,6 +544,144 @@ impl AppState {
             op.items = self.selection.iter().copied().collect();
             self.update_op(op);
         }
+    }
+
+    // ---------------------------------------------------------------- tabs
+
+    /// The selected op when it is a Contour with tabs enabled.
+    fn tab_op(&self) -> Option<&Operation> {
+        let id = self.selected_op?;
+        self.project
+            .operations
+            .iter()
+            .find(|o| o.id == id && o.tabs.enabled && matches!(o.kind, OpKind::Contour { .. }))
+    }
+
+    /// Closed contour of `item` when it belongs to `op`.
+    fn tab_item<'a>(&'a self, op: &Operation, item: u64) -> Option<&'a Contour> {
+        if !op.items.contains(&item) {
+            return None;
+        }
+        match &self.item(item)?.geom {
+            Geom::Contour(c) if c.closed && c.length() > 0.0 => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Tab positions (fractions) per closed item of the selected tab op, as the toolpath uses them.
+    pub fn tab_markers(&self) -> Vec<(u64, &Contour, Vec<f64>)> {
+        let Some(op) = self.tab_op() else {
+            return Vec::new();
+        };
+        let d = self.tool(op.tool).map_or(0.0, |t| t.diameter);
+        op.items
+            .iter()
+            .filter_map(|&id| {
+                let c = self.tab_item(op, id)?;
+                Some((id, c, hc_toolpath::tab_positions(c, &op.tabs, id, d).0))
+            })
+            .collect()
+    }
+
+    /// Nearest tab marker within `tol` of `p`.
+    pub fn tab_at(&self, p: Point, tol: f64) -> Option<(u64, usize)> {
+        let mut best = None;
+        let mut best_d = tol;
+        for (id, c, pos) in self.tab_markers() {
+            let l = c.length();
+            for (i, t) in pos.iter().enumerate() {
+                let d = c.point_at(t.rem_euclid(1.0) * l).distance(p);
+                if d <= best_d {
+                    best_d = d;
+                    best = Some((id, i));
+                }
+            }
+        }
+        best
+    }
+
+    /// Edits the manual positions of `item` on the selected tab op (materializing the current ones first).
+    /// `f` gets the positions and the fraction of `p` on the item.
+    fn edit_tabs(&mut self, item: u64, p: Point, f: impl FnOnce(&mut Vec<f64>, f64)) {
+        let Some(op) = self.tab_op() else { return };
+        let Some(c) = self.tab_item(op, item) else {
+            return;
+        };
+        let t = c.closest(p).0 / c.length();
+        let mut op = op.clone();
+        if !op.tabs.manual.iter().any(|m| m.item == item) {
+            let d = self.tool(op.tool).map_or(0.0, |t| t.diameter);
+            let positions = hc_toolpath::tab_positions(c, &op.tabs, item, d).0;
+            op.tabs.manual.push(ManualTabs { item, positions });
+        }
+        let m = op
+            .tabs
+            .manual
+            .iter_mut()
+            .find(|m| m.item == item)
+            .expect("just added");
+        f(&mut m.positions, t);
+        self.update_op(op);
+    }
+
+    pub fn add_tab(&mut self, item: u64, p: Point) {
+        let mut added = None;
+        self.edit_tabs(item, p, |v, t| {
+            v.push(t);
+            added = Some(v.len() - 1);
+        });
+        if let Some(i) = added {
+            self.selected_tab = Some((item, i));
+        }
+    }
+
+    /// True when `idx` is a current tab of `item` on the selected tab op.
+    fn has_tab(&self, item: u64, idx: usize) -> bool {
+        self.tab_markers()
+            .iter()
+            .any(|(id, _, pos)| *id == item && idx < pos.len())
+    }
+
+    pub fn move_tab(&mut self, item: u64, idx: usize, p: Point) {
+        if !self.has_tab(item, idx) {
+            return;
+        }
+        self.edit_tabs(item, p, |v, t| {
+            if let Some(x) = v.get_mut(idx) {
+                *x = t;
+            }
+        });
+    }
+
+    pub fn delete_tab(&mut self, item: u64, idx: usize) {
+        if !self.has_tab(item, idx) {
+            return;
+        }
+        let mut deleted = false;
+        self.edit_tabs(item, Point::new(0.0, 0.0), |v, _| {
+            if idx < v.len() {
+                v.remove(idx);
+                deleted = true;
+            }
+        });
+        if let Some((sel_item, sel)) = self.selected_tab.filter(|&(i, _)| deleted && i == item) {
+            self.selected_tab = match sel.cmp(&idx) {
+                std::cmp::Ordering::Less => Some((sel_item, sel)),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some((sel_item, sel - 1)),
+            };
+        }
+    }
+
+    /// "Reset to auto": drops every manual entry of `op` (the selected tab op only).
+    pub fn reset_tabs(&mut self, op: u64) {
+        let Some(o) = self.tab_op().filter(|o| o.id == op) else {
+            return;
+        };
+        let mut o = o.clone();
+        o.tabs.manual.clear();
+        self.update_op(o);
+        self.selected_tab = None;
     }
 
     // ---------------------------------------------------------------- tool library
@@ -1235,5 +1385,276 @@ mod edge_tests {
         assert_eq!(s.selection, [1, 2].into());
         s.clear_selection();
         assert!(s.selection.is_empty());
+    }
+
+    #[test]
+    fn m6_t13_tab_editing() {
+        let mut s = AppState::new(None);
+        let mut t = tool(1);
+        t.diameter = 6.0;
+        s.library.add(t).unwrap();
+        let r = Contour::from_bulge_vertices(
+            &[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]
+                .map(|(x, y)| (Point::new(x, y), 0.0)),
+            true,
+        );
+        s.project.items.push(Item {
+            id: 1,
+            layer: "0".into(),
+            source: hc_project::Source::Drawn,
+            geom: Geom::Contour(r),
+        });
+        s.project.next_id = 2;
+        s.items_changed();
+        s.selection.insert(1);
+        let op = s.new_operation(NewKind::Contour, 1).unwrap();
+        let mut o = s.project.operations[0].clone();
+        o.tabs.enabled = true;
+        o.depth = 6.0;
+        o.depth_per_pass = 2.0;
+        s.update_op(o);
+
+        // no op selected: all no-ops
+        s.selected_op = None;
+        let before = s.project.clone();
+        s.add_tab(1, Point::new(20.0, -1.0));
+        s.move_tab(1, 0, Point::new(0.0, 20.0));
+        s.delete_tab(1, 0);
+        s.reset_tabs(op);
+        assert_eq!(s.project, before);
+        assert_eq!(s.tab_at(Point::new(37.5, 0.5), 1.0), None);
+        s.select_op(op);
+
+        let manual = |s: &AppState| s.project.operations[0].tabs.manual.clone();
+        let mut last = {
+            s.refresh_toolpaths();
+            s.toolpaths.clone()
+        };
+        let mut step = |s: &mut AppState, f: &dyn Fn(&mut AppState)| {
+            s.dirty = false;
+            f(s);
+            assert!(s.dirty);
+            s.refresh_toolpaths();
+            assert_ne!(s.toolpaths, last);
+            assert!(s.toolpaths[0].1.is_ok());
+            last = s.toolpaths.clone();
+        };
+        step(&mut s, &|s| s.add_tab(1, Point::new(20.0, -1.0)));
+        let m = manual(&s);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].item, 1);
+        assert_eq!(m[0].positions.len(), 5);
+        assert!((m[0].positions[4] - 20.0 / 300.0).abs() < 1e-9);
+        assert!((m[0].positions[0] - 0.125).abs() < 1e-9);
+        step(&mut s, &|s| s.move_tab(1, 4, Point::new(0.0, 20.0)));
+        assert!((manual(&s)[0].positions[4] - 280.0 / 300.0).abs() < 1e-9);
+        step(&mut s, &|s| s.delete_tab(1, 0));
+        assert_eq!(manual(&s)[0].positions.len(), 4);
+        step(&mut s, &|s| s.reset_tabs(op));
+        assert!(manual(&s).is_empty());
+        let auto = &s.tab_markers()[0].2;
+        for (a, b) in auto.iter().zip([0.125, 0.375, 0.625, 0.875]) {
+            assert!((a - b).abs() < 1e-9);
+        }
+        assert_eq!(s.tab_at(Point::new(37.5, 0.5), 1.0), Some((1, 0)));
+        assert_eq!(s.tab_at(Point::new(37.5, 5.0), 1.0), None);
+        // other items / disabled tabs: no-op
+        let before = s.project.clone();
+        s.add_tab(99, Point::new(0.0, 0.0));
+        assert_eq!(s.project, before);
+        // op selection change clears the selected tab
+        s.selected_tab = Some((1, 0));
+        s.new_project();
+        assert_eq!(s.selected_tab, None);
+    }
+
+    /// R (100×50) as item 1 and a square (item 2) in one Contour op with tabs enabled, op selected.
+    fn tab_state() -> (AppState, u64) {
+        let mut s = AppState::new(None);
+        let mut t = tool(1);
+        t.diameter = 6.0;
+        s.library.add(t).unwrap();
+        for (id, (x0, w, h)) in [(1, (0.0, 100.0, 50.0)), (2, (200.0, 40.0, 40.0))] {
+            let r = Contour::from_bulge_vertices(
+                &[(x0, 0.0), (x0 + w, 0.0), (x0 + w, h), (x0, h)]
+                    .map(|(x, y)| (Point::new(x, y), 0.0)),
+                true,
+            );
+            s.project.items.push(Item {
+                id,
+                layer: "0".into(),
+                source: hc_project::Source::Drawn,
+                geom: Geom::Contour(r),
+            });
+        }
+        s.project.next_id = 3;
+        s.items_changed();
+        s.selection = [1, 2].into_iter().collect();
+        let op = s.new_operation(NewKind::Contour, 1).unwrap();
+        let mut o = s.project.operations[0].clone();
+        o.tabs.enabled = true;
+        o.depth = 6.0;
+        o.depth_per_pass = 2.0;
+        s.update_op(o);
+        s.select_op(op);
+        (s, op)
+    }
+
+    #[test]
+    fn m6_tab_edits_touch_only_their_item() {
+        let (mut s, _) = tab_state();
+        s.add_tab(1, Point::new(50.0, -2.0));
+        let m = &s.project.operations[0].tabs.manual;
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].item, 1);
+        assert!((m[0].positions[4] - 50.0 / 300.0).abs() < 1e-9);
+        assert_eq!(s.selected_tab, Some((1, 4)));
+        // item 2 still auto: 4 markers
+        let markers = s.tab_markers();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers.iter().find(|m| m.0 == 2).unwrap().2.len(), 4);
+        assert_eq!(markers.iter().find(|m| m.0 == 1).unwrap().2.len(), 5);
+    }
+
+    #[test]
+    fn m6_out_of_range_index_and_foreign_item() {
+        let (mut s, op) = tab_state();
+        let before = s.project.clone();
+        // item not in the op / not existing: no-op
+        s.add_tab(99, Point::new(0.0, 0.0));
+        assert_eq!(s.project, before);
+        // disabled tabs: no-op
+        let mut o = s.project.operations[0].clone();
+        o.tabs.enabled = false;
+        s.update_op(o);
+        let before = s.project.clone();
+        s.add_tab(1, Point::new(10.0, 0.0));
+        s.move_tab(1, 0, Point::new(10.0, 0.0));
+        s.delete_tab(1, 0);
+        s.reset_tabs(op);
+        assert_eq!(s.project, before);
+        assert!(s.tab_markers().is_empty());
+        assert_eq!(s.tab_at(Point::new(37.5, 0.0), 1.0), None);
+        // re-enabled: bad indices never panic or change positions
+        let mut o = s.project.operations[0].clone();
+        o.tabs.enabled = true;
+        s.update_op(o);
+        s.move_tab(1, 17, Point::new(10.0, 0.0));
+        s.delete_tab(1, 17);
+        let pos: Vec<f64> = s.project.operations[0]
+            .tabs
+            .manual
+            .iter()
+            .flat_map(|m| m.positions.clone())
+            .collect();
+        // either nothing was materialized or it holds exactly the auto positions
+        assert!(
+            pos.is_empty() || pos == [0.125, 0.375, 0.625, 0.875],
+            "{pos:?}"
+        );
+    }
+
+    #[test]
+    fn m6_delete_every_tab_leaves_empty_manual_and_no_lifts() {
+        let (mut s, op) = tab_state();
+        for _ in 0..4 {
+            s.delete_tab(1, 0);
+        }
+        let m = &s.project.operations[0].tabs.manual;
+        assert_eq!(m.len(), 1);
+        assert!(m[0].positions.is_empty());
+        // the item keeps 0 tabs (an empty manual entry is not "auto")
+        assert!(s
+            .tab_markers()
+            .iter()
+            .find(|m| m.0 == 1)
+            .unwrap()
+            .2
+            .is_empty());
+        s.delete_tab(1, 0); // nothing left: no panic
+        s.reset_tabs(op);
+        assert!(s.project.operations[0].tabs.manual.is_empty());
+        assert_eq!(
+            s.tab_markers().iter().find(|m| m.0 == 1).unwrap().2.len(),
+            4
+        );
+    }
+
+    #[test]
+    fn m6_remove_item_drops_manual_and_markers() {
+        let (mut s, _) = tab_state();
+        s.add_tab(2, Point::new(220.0, -1.0));
+        assert_eq!(s.project.operations[0].tabs.manual.len(), 1);
+        s.project.remove_item(2);
+        s.items_changed();
+        assert!(s.project.operations[0].tabs.manual.is_empty());
+        assert_eq!(s.tab_markers().len(), 1);
+    }
+
+    #[test]
+    fn m6_selected_tab_cleared_on_op_change() {
+        let (mut s, op) = tab_state();
+        s.selection = [1].into_iter().collect();
+        let op2 = s.new_operation(NewKind::Contour, 1).unwrap();
+        s.select_op(op);
+        s.selected_tab = Some((1, 0));
+        s.select_op(op); // same op: kept
+        assert_eq!(s.selected_tab, Some((1, 0)));
+        s.select_op(op2);
+        assert_eq!(s.selected_tab, None);
+        s.select_op(op);
+        s.selected_tab = Some((1, 0));
+        s.delete_op(op);
+        assert_eq!(s.selected_tab, None);
+    }
+
+    #[test]
+    fn m6_manual_tabs_survive_tool_change() {
+        let (mut s, _) = tab_state();
+        s.move_tab(1, 0, Point::new(50.0, 0.0));
+        let before = s.project.operations[0].tabs.manual.clone();
+        let mut t = tool(2);
+        t.diameter = 10.0;
+        s.library.add(t.clone()).unwrap();
+        s.project.tools.push(t);
+        let mut o = s.project.operations[0].clone();
+        o.tool = 2;
+        s.update_op(o);
+        assert_eq!(s.project.operations[0].tabs.manual, before);
+        s.refresh_toolpaths();
+        assert!(s.toolpaths[0].1.is_ok());
+    }
+
+    #[test]
+    fn m6_review_r5_out_of_range_index_is_noop() {
+        let (mut s, _) = tab_state();
+        s.dirty = false;
+        let before = s.project.clone();
+        s.move_tab(1, 4, Point::new(10.0, 0.0)); // auto has 4 tabs: 0..=3
+        s.delete_tab(1, 4);
+        s.move_tab(1, usize::MAX, Point::new(10.0, 0.0));
+        s.delete_tab(3, 0); // not an item of the op
+        assert_eq!(s.project, before);
+        assert!(s.project.operations[0].tabs.manual.is_empty());
+        assert!(!s.dirty);
+        // in range still works
+        s.move_tab(1, 3, Point::new(10.0, 0.0));
+        assert!(s.dirty);
+        assert_eq!(s.project.operations[0].tabs.manual[0].positions.len(), 4);
+    }
+
+    #[test]
+    fn m6_review_r6_delete_shifts_selected_index() {
+        let (mut s, _) = tab_state();
+        s.selected_tab = Some((1, 2));
+        s.delete_tab(1, 0);
+        assert_eq!(s.selected_tab, Some((1, 1)));
+        s.delete_tab(1, 2); // above the selection: unchanged
+        assert_eq!(s.selected_tab, Some((1, 1)));
+        s.delete_tab(2, 0); // other item: unchanged
+        assert_eq!(s.selected_tab, Some((1, 1)));
+        s.delete_tab(1, 1); // the selected one
+        assert_eq!(s.selected_tab, None);
+        assert_eq!(s.project.operations[0].tabs.manual[0].positions.len(), 1);
     }
 }

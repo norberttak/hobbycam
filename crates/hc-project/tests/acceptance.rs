@@ -14,6 +14,10 @@ const GOLDEN: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/project/small_v1.hcam"
 );
+const GOLDEN_V2: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/project/small_v2.hcam"
+);
 
 /// Fresh empty scratch directory for one test.
 fn scratch(name: &str) -> PathBuf {
@@ -209,19 +213,20 @@ fn t04_golden_file() {
     let (loaded, problems) = Project::from_json(&text).unwrap();
     assert!(problems.is_empty());
     assert_eq!(loaded, p);
-    assert_eq!(p.to_json().unwrap(), text);
+    // M6: v1 is no longer the current format; the byte-exact check moved to the v2 golden (m6_12)
+    assert_eq!(loaded.format_version, 2);
 }
 
 #[test]
 fn t05_version_check() {
     let mut v: serde_json::Value =
         serde_json::from_str(&small_project().to_json().unwrap()).unwrap();
-    v["format_version"] = 2.into();
+    v["format_version"] = 3.into(); // M6: current is 2
     assert!(matches!(
         Project::from_json(&v.to_string()),
         Err(ProjectError::VersionTooNew {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     ));
     v.as_object_mut().unwrap().remove("format_version");
@@ -229,7 +234,7 @@ fn t05_version_check() {
         Project::from_json(&v.to_string()),
         Err(ProjectError::MissingVersion)
     ));
-    assert_eq!(migrate(v.clone(), 1).unwrap(), v);
+    assert_eq!(migrate(v.clone(), 2).unwrap(), v); // M6: v1 now migrates (adds tabs.manual)
 }
 
 #[test]
@@ -483,4 +488,65 @@ fn r5_missing_version_message() {
         ProjectError::MissingVersion.to_string(),
         "format_version is missing or is not a whole number"
     );
+}
+
+// ---------------------------------------------------------------- M6 (specs/M6.md test 12)
+
+/// small_project plus manual tabs on the Contour op (the v2 golden file).
+fn small_project_v2() -> Project {
+    let mut p = small_project();
+    p.operations[0].tabs.manual = vec![ManualTabs {
+        item: 1,
+        positions: vec![0.125, 0.625],
+    }];
+    p
+}
+
+#[test]
+fn m6_12_project_v2() {
+    // v1 file migrates: version 2, every op has manual == []
+    let (v1, problems) = Project::from_json(&fs::read_to_string(GOLDEN).unwrap()).unwrap();
+    assert!(problems.is_empty());
+    assert_eq!(v1.format_version, FORMAT_VERSION);
+    assert_eq!(FORMAT_VERSION, 2);
+    assert!(v1.operations.iter().all(|o| o.tabs.manual.is_empty()));
+    assert_eq!(v1, small_project());
+
+    // v2 golden: equal to the code-built project, and byte-exact to_json
+    let text = fs::read_to_string(GOLDEN_V2).unwrap();
+    let p = small_project_v2();
+    let (loaded, problems) = Project::from_json(&text).unwrap();
+    assert!(problems.is_empty());
+    assert_eq!(loaded, p);
+    assert_eq!(p.to_json().unwrap(), text);
+
+    // too new, migrate identity at v2
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(migrate(v.clone(), 2).unwrap(), v);
+    v["format_version"] = 3.into();
+    assert!(matches!(
+        Project::from_json(&v.to_string()),
+        Err(ProjectError::VersionTooNew {
+            found: 3,
+            supported: 2
+        })
+    ));
+
+    // library keeps version 1
+    assert_eq!(LIBRARY_FORMAT_VERSION, 1);
+    let dir = scratch("m6_12");
+    let path = dir.join("tools.json");
+    let mut lib = ToolLibrary::default();
+    assert_eq!(lib.format_version, 1);
+    lib.add(tool(3)).unwrap();
+    lib.save(&path).unwrap();
+    assert!(fs::read_to_string(&path)
+        .unwrap()
+        .contains("\"format_version\": 1"));
+    assert_eq!(ToolLibrary::load(&path).unwrap(), lib);
+
+    // remove_item drops the manual entry
+    let mut p = small_project_v2();
+    p.remove_item(1);
+    assert!(p.operations[0].tabs.manual.is_empty());
 }

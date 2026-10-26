@@ -77,6 +77,40 @@ impl Contour {
         self.segments.iter().map(Segment::length).sum()
     }
 
+    /// Point at arc length `s` from the start. Closed: `s` is taken mod length; open: clamped.
+    /// Panics on an empty contour.
+    pub fn point_at(&self, s: f64) -> Point {
+        let len = self.length();
+        let mut s = if self.closed && len > EPS {
+            s.rem_euclid(len)
+        } else {
+            s.clamp(0.0, len)
+        };
+        for seg in &self.segments {
+            let l = seg.length();
+            if s <= l {
+                return seg.point_at(s);
+            }
+            s -= l;
+        }
+        self.end()
+    }
+
+    /// (arc length s, distance) of the nearest point to `p`; the first segment wins ties.
+    pub fn closest(&self, p: Point) -> (f64, f64) {
+        let mut best = (0.0, f64::INFINITY);
+        let mut acc = 0.0;
+        for seg in &self.segments {
+            let d = seg.closest(p);
+            let dist = p.distance(seg.point_at(d));
+            if dist < best.1 {
+                best = (acc + d, dist);
+            }
+            acc += seg.length();
+        }
+        best
+    }
+
     pub fn bbox(&self) -> BBox {
         self.segments
             .iter()
@@ -442,5 +476,25 @@ pub(crate) mod tests {
             assert!(a.start().approx_eq(b.start(), T) && a.end().approx_eq(b.end(), T));
             assert!((a.length() - b.length()).abs() < T);
         }
+    }
+
+    #[test]
+    fn m6_01_contour_point_at_and_closest() {
+        let r = polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]);
+        assert!(r.point_at(150.0).approx_eq(p(100.0, 50.0), 1e-6));
+        assert!(r.point_at(310.0).approx_eq(p(10.0, 0.0), 1e-6));
+        assert!(r.point_at(-10.0).approx_eq(p(0.0, 10.0), 1e-6));
+        let (s, d) = r.closest(p(37.5, -3.0));
+        assert!((s - 37.5).abs() < 1e-6 && (d - 3.0).abs() < 1e-6);
+        // tie at the corner (100,0): first segment wins
+        let (s, _) = r.closest(p(103.0, -3.0));
+        assert!((s - 100.0).abs() < 1e-6);
+        let open = Contour {
+            closed: false,
+            ..r.clone()
+        };
+        assert!(open.point_at(310.0).approx_eq(open.end(), 1e-6));
+        assert!(open.point_at(-5.0).approx_eq(p(0.0, 0.0), 1e-6));
+        assert!((r.distance_to(p(50.0, 60.0)) - 10.0).abs() < T);
     }
 }

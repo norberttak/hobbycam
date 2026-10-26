@@ -5,10 +5,10 @@ mod project;
 mod tool;
 mod units;
 
-pub use io::{atomic_write, migrate, FORMAT_VERSION};
+pub use io::{atomic_write, migrate, FORMAT_VERSION, LIBRARY_FORMAT_VERSION};
 pub use project::{
-    Direction, Geom, Item, LayerInfo, Machine, OpKind, Operation, Problem, Project, Side, Source,
-    Stock, TabPlacement, Tabs, WorkOrigin,
+    Direction, Geom, Item, LayerInfo, Machine, ManualTabs, OpKind, Operation, Problem, Project,
+    Side, Source, Stock, TabPlacement, Tabs, WorkOrigin,
 };
 pub use tool::{default_library_path, Tool, ToolKind, ToolLibrary};
 pub use units::{from_display, parse_length, to_display, Units};

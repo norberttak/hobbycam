@@ -1,4 +1,6 @@
-use crate::io::{atomic_write, from_versioned_json, to_checked_json, FORMAT_VERSION};
+use crate::io::{
+    atomic_write, from_versioned_json, no_migrate, to_checked_json, LIBRARY_FORMAT_VERSION,
+};
 use crate::ProjectError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,7 +43,7 @@ pub struct ToolLibrary {
 impl Default for ToolLibrary {
     fn default() -> Self {
         ToolLibrary {
-            format_version: FORMAT_VERSION,
+            format_version: LIBRARY_FORMAT_VERSION,
             tools: Vec::new(),
         }
     }
@@ -52,8 +54,9 @@ impl ToolLibrary {
     pub fn load(path: &Path) -> Result<ToolLibrary, ProjectError> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                let mut lib: ToolLibrary = from_versioned_json(&text)?;
-                lib.format_version = FORMAT_VERSION;
+                let mut lib: ToolLibrary =
+                    from_versioned_json(&text, LIBRARY_FORMAT_VERSION, no_migrate)?;
+                lib.format_version = LIBRARY_FORMAT_VERSION;
                 lib.tools.sort_by_key(|t| t.id);
                 // a duplicated T-number is ambiguous at the manual tool change: refuse the file
                 if let Some(w) = lib.tools.windows(2).find(|w| w[0].id == w[1].id) {

@@ -1,4 +1,4 @@
-use crate::io::{atomic_write, from_versioned_json, to_checked_json, FORMAT_VERSION};
+use crate::io::{atomic_write, from_versioned_json, migrate, to_checked_json, FORMAT_VERSION};
 use crate::{ProjectError, Tool, Units};
 use hc_dxf::DxfImport;
 use hc_geom::{Contour, Point};
@@ -100,12 +100,23 @@ pub enum TabPlacement {
     Spacing { distance: f64 },
 }
 
+/// Manually placed tabs of one item: fractions of the item contour length in [0, 1), from the item's
+/// start in its stored direction, in insertion order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualTabs {
+    pub item: u64,
+    pub positions: Vec<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tabs {
     pub enabled: bool,
     pub placement: TabPlacement,
     pub width: f64,
     pub height: f64,
+    /// Per-item manual positions; an item with an entry ignores `placement`.
+    #[serde(default)]
+    pub manual: Vec<ManualTabs>,
 }
 
 impl Default for Tabs {
@@ -115,6 +126,7 @@ impl Default for Tabs {
             placement: TabPlacement::Count { count: 4 },
             width: 5.0,
             height: 1.0,
+            manual: Vec::new(),
         }
     }
 }
@@ -268,6 +280,7 @@ impl Project {
         self.items.retain(|i| i.id != id);
         for op in &mut self.operations {
             op.items.retain(|&i| i != id);
+            op.tabs.manual.retain(|m| m.item != id);
         }
     }
 
@@ -335,7 +348,7 @@ impl Project {
 
     /// Parse + version check + migrate + validate, without I/O.
     pub fn from_json(text: &str) -> Result<(Project, Vec<Problem>), ProjectError> {
-        let mut p: Project = from_versioned_json(text)?;
+        let mut p: Project = from_versioned_json(text, FORMAT_VERSION, migrate)?;
         p.format_version = FORMAT_VERSION;
         let problems = p.validate();
         Ok((p, problems))

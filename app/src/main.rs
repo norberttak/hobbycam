@@ -50,6 +50,8 @@ pub struct App {
     title: String,
     /// Screen position where a left-button box drag started.
     pub box_start: Option<egui::Pos2>,
+    /// A left-button drag that started on a tab marker moves that tab.
+    pub tab_drag: bool,
 }
 
 impl App {
@@ -62,6 +64,7 @@ impl App {
             allow_close: false,
             title: String::new(),
             box_start: None,
+            tab_drag: false,
         }
     }
 

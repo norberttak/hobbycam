@@ -119,3 +119,44 @@ fn shot_toolpaths() {
     h.run();
     save(&mut h, "toolpaths_hidden");
 }
+
+/// M6 test 14. Manual check: 4 markers on straight edges, the selected one orange.
+#[test]
+#[ignore]
+fn shot_tabs() {
+    let mut s = AppState::new(None);
+    let mut t1 = state::tests::tool(1);
+    t1.diameter = 6.35;
+    s.library.add(t1).unwrap();
+    s.open_cli(&state::tests::bracket_path());
+    let (outer, contour) = s
+        .project
+        .items
+        .iter()
+        .filter(|i| i.layer == "Outline")
+        .filter_map(|i| match &i.geom {
+            hc_project::Geom::Contour(c) if c.closed => Some((i.id, c.clone())),
+            _ => None,
+        })
+        .max_by(|a, b| a.1.signed_area().abs().total_cmp(&b.1.signed_area().abs()))
+        .unwrap();
+    s.selection = [outer].into_iter().collect();
+    let op = s.new_operation(NewKind::Contour, 1).unwrap();
+    let mut o = s.project.operations[0].clone();
+    o.tabs.enabled = true;
+    o.depth = 6.0;
+    s.update_op(o.clone());
+    s.select_op(op);
+    let (pos, note) = hc_toolpath::tab_positions(&contour, &o.tabs, outer, 6.35);
+    assert_eq!(pos.len(), 4);
+    assert_eq!(note, None);
+    s.selected_tab = Some((outer, 1));
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+    h.run();
+    assert!(h.query_by_label("Reset to auto").is_some());
+    assert!(h.state().state.toolpaths[0].1.is_ok());
+    save(&mut h, "tabs");
+}

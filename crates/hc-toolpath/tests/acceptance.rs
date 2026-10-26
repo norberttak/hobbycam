@@ -712,3 +712,563 @@ fn t14_bracket() {
         assert!(ats.iter().any(|a| a.approx_eq(h.center, T)));
     }
 }
+
+// ---------------------------------------------------------------- M6 (specs/M6.md), tabs
+
+use hc_project::{ManualTabs, TabPlacement, Tabs};
+
+/// R = 100×50 rectangle, CCW, start (0,0), length 300.
+fn r_rect() -> Contour {
+    rect(0.0, 0.0, 100.0, 50.0)
+}
+
+fn tabs_count(count: u32) -> Tabs {
+    Tabs {
+        enabled: true,
+        placement: TabPlacement::Count { count },
+        width: 5.0,
+        height: 2.0,
+        manual: Vec::new(),
+    }
+}
+
+/// One lifted stretch: up/down vertical at plunge feed, XY path at z_tab.
+struct Lift {
+    vertical_ok: bool,
+    z: f64,
+    path: Contour,
+    all_linear: bool,
+}
+
+impl Lift {
+    fn len(&self) -> f64 {
+        self.path.length()
+    }
+    fn mid(&self) -> Point {
+        self.path.point_at(self.len() / 2.0)
+    }
+}
+
+/// (per pass level: z, XY feed length, number of lifts) and every lift. A pass level is set by each
+/// downward Linear; moves between a tab's up and down belong to the current level.
+fn analyse(tp: &Toolpath, plunge: f64) -> (Vec<(f64, f64, usize)>, Vec<Lift>) {
+    let mut levels: Vec<(f64, f64, usize)> = Vec::new();
+    let mut lifts: Vec<Lift> = Vec::new();
+    let mut lifted = false;
+    let mut pos = Point3 {
+        x: f64::NAN,
+        y: f64::NAN,
+        z: f64::NAN,
+    };
+    for m in &tp.moves {
+        let seg = match m {
+            Move::Rapid(to) => {
+                pos = *to;
+                continue;
+            }
+            Move::Linear { to, feed } => {
+                let vertical = to.xy().approx_eq(pos.xy(), 1e-9);
+                if to.z < pos.z - 1e-9 {
+                    if lifted {
+                        let l = lifts.last_mut().unwrap();
+                        l.vertical_ok &= vertical && (feed - plunge).abs() < T;
+                        lifted = false;
+                    } else if levels.last().is_none_or(|l| (l.0 - to.z).abs() > 1e-9) {
+                        levels.push((to.z, 0.0, 0));
+                    }
+                    pos = *to;
+                    continue;
+                }
+                if to.z > pos.z + 1e-9 && to.z <= 1e-9 {
+                    lifted = true;
+                    levels.last_mut().unwrap().2 += 1;
+                    lifts.push(Lift {
+                        vertical_ok: vertical && (feed - plunge).abs() < T,
+                        z: to.z,
+                        path: Contour {
+                            segments: Vec::new(),
+                            closed: false,
+                        },
+                        all_linear: true,
+                    });
+                    pos = *to;
+                    continue;
+                }
+                if vertical {
+                    pos = *to;
+                    continue;
+                }
+                Segment::Line {
+                    start: pos.xy(),
+                    end: to.xy(),
+                }
+            }
+            Move::Arc {
+                to, center, ccw, ..
+            } => {
+                let d = pos.xy() - *center;
+                if lifted {
+                    lifts.last_mut().unwrap().all_linear = false;
+                }
+                Segment::Arc {
+                    center: *center,
+                    radius: d.length(),
+                    start_angle: d.y.atan2(d.x),
+                    sweep: arc_sweep(pos.xy(), to.xy(), *center, *ccw),
+                }
+            }
+            Move::Drill { .. } => continue,
+        };
+        levels.last_mut().unwrap().1 += seg.length();
+        if lifted {
+            lifts.last_mut().unwrap().path.segments.push(seg);
+        }
+        pos = match m {
+            Move::Linear { to, .. } | Move::Arc { to, .. } => *to,
+            _ => unreachable!(),
+        };
+    }
+    (levels, lifts)
+}
+
+fn approx(a: f64, b: f64) -> bool {
+    (a - b).abs() < T
+}
+
+/// Every expected point matches exactly one lift midpoint.
+fn assert_mids(lifts: &[Lift], expected: &[(f64, f64)]) {
+    assert_eq!(lifts.len(), expected.len());
+    for &(x, y) in expected {
+        assert!(
+            lifts.iter().any(|l| l.mid().approx_eq(p(x, y), T)),
+            "no lift at ({x},{y}): {:?}",
+            lifts.iter().map(Lift::mid).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn m6_01_geom_helpers() {
+    let (a, b) = Segment::Line {
+        start: p(0.0, 0.0),
+        end: p(10.0, 0.0),
+    }
+    .split_at(4.0);
+    assert!(a.start().approx_eq(p(0.0, 0.0), T) && a.end().approx_eq(p(4.0, 0.0), T));
+    assert!(b.start().approx_eq(p(4.0, 0.0), T) && b.end().approx_eq(p(10.0, 0.0), T));
+    let arc = Segment::Arc {
+        center: p(0.0, 0.0),
+        radius: 10.0,
+        start_angle: 0.0,
+        sweep: PI / 2.0,
+    };
+    let (a, b) = arc.split_at(5.0 * PI / 2.0);
+    let (
+        Segment::Arc { sweep: s1, .. },
+        Segment::Arc {
+            sweep: s2,
+            start_angle,
+            ..
+        },
+    ) = (a, b)
+    else {
+        panic!("arcs expected")
+    };
+    assert!(approx(s1, PI / 4.0) && approx(s2, PI / 4.0) && approx(start_angle, PI / 4.0));
+    assert!(a.end().approx_eq(p(7.071068, 7.071068), T));
+    let r = r_rect();
+    assert!(r.point_at(150.0).approx_eq(p(100.0, 50.0), T));
+    assert!(r.point_at(310.0).approx_eq(p(10.0, 0.0), T));
+    let (s, d) = r.closest(p(37.5, -3.0));
+    assert!(approx(s, 37.5) && approx(d, 3.0));
+}
+
+#[test]
+fn m6_02_auto_count_and_spacing() {
+    let r = r_rect();
+    let (pos, note) = tab_positions(&r, &tabs_count(4), 1, 6.0);
+    assert_eq!(note, None);
+    let want = [0.125, 0.375, 0.625, 0.875];
+    assert_eq!(pos.len(), 4);
+    for (a, b) in pos.iter().zip(want) {
+        assert!(approx(*a, b));
+    }
+    let pts: Vec<Point> = pos.iter().map(|t| r.point_at(t * 300.0)).collect();
+    for (q, (x, y)) in pts
+        .iter()
+        .zip([(37.5, 0.0), (100.0, 12.5), (62.5, 50.0), (0.0, 37.5)])
+    {
+        assert!(q.approx_eq(p(x, y), T));
+    }
+    let spacing = |d| {
+        let t = Tabs {
+            placement: TabPlacement::Spacing { distance: d },
+            ..tabs_count(0)
+        };
+        tab_positions(&r, &t, 1, 6.0)
+    };
+    assert_eq!(spacing(80.0).0, pos);
+    assert_eq!(spacing(100.0).0.len(), 3);
+    assert_eq!(spacing(1000.0).0.len(), 1);
+}
+
+#[test]
+fn m6_03_snapping() {
+    let r = r_rect();
+    let (pos, note) = tab_positions(&r, &tabs_count(3), 1, 6.0);
+    assert_eq!(note, None);
+    let s: Vec<f64> = pos.iter().map(|t| t * 300.0).collect();
+    assert_eq!(s.len(), 3);
+    for (a, b) in s.iter().zip([50.0, 141.5, 241.5]) {
+        assert!(approx(*a, b), "{s:?}");
+    }
+    for (t, (x, y)) in pos.iter().zip([(50.0, 0.0), (100.0, 41.5), (8.5, 50.0)]) {
+        assert!(r.point_at(t * 300.0).approx_eq(p(x, y), T));
+    }
+}
+
+#[test]
+fn m6_04_too_short() {
+    let c10 = circle(0.0, 0.0, 10.0);
+    let (pos, note) = tab_positions(&c10, &tabs_count(4), 5, 6.0);
+    assert_eq!(pos.len(), 1);
+    assert_eq!(
+        note,
+        Some(ToolpathNote::TabsReduced {
+            item: 5,
+            placed: 1,
+            requested: 4
+        })
+    );
+    let c5 = circle(0.0, 0.0, 5.0);
+    let (pos, note) = tab_positions(&c5, &tabs_count(4), 5, 6.0);
+    assert!(pos.is_empty());
+    assert_eq!(
+        note,
+        Some(ToolpathNote::TabsReduced {
+            item: 5,
+            placed: 0,
+            requested: 4
+        })
+    );
+    for (d, placed) in [(10.0, 1), (5.0, 0)] {
+        let mut pr = Project::new();
+        let id = add_c(&mut pr, circle(0.0, 0.0, d));
+        let op = add_op(
+            &mut pr,
+            contour_kind(Side::Outside, Direction::Climb),
+            vec![id],
+        );
+        op_mut(&mut pr, op).tabs = tabs_count(4);
+        let tp = run(&pr, op).unwrap();
+        assert_eq!(
+            tp.notes,
+            [ToolpathNote::TabsReduced {
+                item: id,
+                placed,
+                requested: 4
+            }]
+        );
+        // lifts in the final pass (depth 5, h 2: the −3.33 pass lifts too)
+        assert_eq!(analyse(&tp, 200.0).0.last().unwrap().2, placed);
+        check_invariants(&pr, &tp);
+    }
+}
+
+/// Project with R and one Contour op (depth 6, dpp 2, tabs Count 4 w 5 h 2).
+fn r_project(side: Side, d: f64) -> (Project, u64, u64) {
+    let mut pr = Project::new();
+    pr.tools.push(tool(1, d));
+    let id = add_c(&mut pr, r_rect());
+    let op = add_op(&mut pr, contour_kind(side, Direction::Climb), vec![id]);
+    let o = op_mut(&mut pr, op);
+    o.depth = 6.0;
+    o.depth_per_pass = 2.0;
+    o.tabs = tabs_count(4);
+    (pr, id, op)
+}
+
+#[test]
+fn m6_05_z_profile() {
+    let (pr, _, op) = r_project(Side::Outside, 6.0);
+    let tp = run(&pr, op).unwrap();
+    assert!(tp.notes.is_empty());
+    check_invariants(&pr, &tp);
+    let (levels, lifts) = analyse(&tp, 200.0);
+    assert_eq!(levels.len(), 3);
+    for ((z, len, n), (wz, wn)) in levels.iter().zip([(-2.0, 0), (-4.0, 0), (-6.0, 4)]) {
+        assert!(approx(*z, wz));
+        assert_eq!(*n, wn);
+        assert!(approx(*len, 300.0 + 6.0 * PI), "pass {z}: {len}");
+    }
+    for l in &lifts {
+        assert!(l.vertical_ok && l.all_linear);
+        assert!(approx(l.z, -4.0));
+        assert!(approx(l.len(), 11.0));
+    }
+    assert_mids(
+        &lifts,
+        &[(37.5, -3.0), (103.0, 12.5), (62.5, 53.0), (-3.0, 37.5)],
+    );
+}
+
+#[test]
+fn m6_06_inside() {
+    let (pr, _, op) = r_project(Side::Inside, 6.0);
+    let tp = run(&pr, op).unwrap();
+    check_invariants(&pr, &tp);
+    let runs = cut_runs(&tp);
+    let bb = runs[0].1.bbox();
+    assert!(approx(bb.width(), 94.0) && approx(bb.height(), 44.0));
+    let (_, lifts) = analyse(&tp, 200.0);
+    for l in &lifts {
+        assert!(l.vertical_ok && l.all_linear && approx(l.len(), 11.0));
+    }
+    assert_mids(
+        &lifts,
+        &[(37.5, 3.0), (97.0, 12.5), (62.5, 47.0), (3.0, 37.5)],
+    );
+}
+
+#[test]
+fn m6_07_circle() {
+    let mut pr = Project::new();
+    let id = add_c(&mut pr, circle(0.0, 0.0, 60.0));
+    let op = add_op(
+        &mut pr,
+        contour_kind(Side::Outside, Direction::Climb),
+        vec![id],
+    );
+    let o = op_mut(&mut pr, op);
+    o.depth = 2.0;
+    o.depth_per_pass = 2.0;
+    o.tabs = Tabs {
+        height: 1.0,
+        ..tabs_count(3)
+    };
+    let tp = run(&pr, op).unwrap();
+    check_invariants(&pr, &tp);
+    let mut pos = Point::new(f64::NAN, f64::NAN);
+    let mut total = 0.0;
+    for m in &tp.moves {
+        match m {
+            Move::Rapid(to) => pos = to.xy(),
+            Move::Linear { to, .. } => {
+                assert!(to.xy().approx_eq(pos, 1e-9), "XY move that is not an arc");
+                pos = to.xy();
+            }
+            Move::Arc {
+                to, center, ccw, ..
+            } => {
+                assert!(center.approx_eq(p(0.0, 0.0), T));
+                assert!(
+                    approx(pos.distance(*center), 33.0) && approx(to.xy().distance(*center), 33.0)
+                );
+                total += arc_sweep(pos, to.xy(), *center, *ccw);
+                pos = to.xy();
+            }
+            Move::Drill { .. } => unreachable!(),
+        }
+    }
+    assert!(approx(total.abs(), TAU));
+    let (_, lifts) = analyse(&tp, 200.0);
+    let lifted: f64 = lifts.iter().map(|l| l.len() / 33.0).sum();
+    assert!(approx(lifted, 1.0));
+    for l in &lifts {
+        assert!(approx(l.len() / 33.0, 11.0 / 33.0));
+    }
+    let at = |deg: f64| {
+        let a = deg.to_radians();
+        (33.0 * a.cos(), 33.0 * a.sin())
+    };
+    assert_mids(&lifts, &[at(60.0), at(180.0), at(300.0)]);
+}
+
+#[test]
+fn m6_08_loop_start() {
+    let (mut pr, id, op) = r_project(Side::Outside, 6.0);
+    op_mut(&mut pr, op).tabs.enabled = false;
+    let tp = run(&pr, op).unwrap();
+    let Move::Rapid(s0) = tp.moves[1] else {
+        panic!()
+    };
+    let s0 = s0.xy();
+    let path = cut_runs(&tp)[0].1.clone(); // starts at S0 (s0 = 0)
+    let big_p = 300.0 + 6.0 * PI;
+    assert!(approx(path.length(), big_p));
+
+    let t = r_rect().closest(s0).0 / 300.0;
+    let o = op_mut(&mut pr, op);
+    o.tabs.enabled = true;
+    o.tabs.manual = vec![ManualTabs {
+        item: id,
+        positions: vec![t],
+    }];
+    let tp = run(&pr, op).unwrap();
+    check_invariants(&pr, &tp);
+    let Move::Rapid(plunge) = tp.moves[1] else {
+        panic!()
+    };
+    let plunge = plunge.xy();
+    assert!(
+        plunge.approx_eq(path.point_at(big_p / 2.0), T),
+        "{plunge:?}"
+    );
+    let (_, lifts) = analyse(&tp, 200.0);
+    assert_eq!(lifts.len(), 1);
+    assert!(approx(lifts[0].len(), 11.0));
+    assert!(
+        lifts[0].mid().approx_eq(s0, T),
+        "{:?} vs {s0:?}",
+        lifts[0].mid()
+    );
+    assert!(plunge.distance(s0) > 5.5);
+    // closed loop: the last cut end is the plunge XY
+    let last_cut = tp
+        .moves
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            Move::Linear { to, .. } | Move::Arc { to, .. } if to.z < 0.0 => Some(to.xy()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(last_cut.approx_eq(plunge, T));
+}
+
+#[test]
+fn m6_09_manual_survives_tool_and_side() {
+    let (mut pr, id, op) = r_project(Side::Outside, 6.0);
+    op_mut(&mut pr, op).tabs.manual = vec![ManualTabs {
+        item: id,
+        positions: vec![1.0 / 6.0],
+    }];
+    let lift = |pr: &Project| {
+        let tp = run(pr, op).unwrap();
+        check_invariants(pr, &tp);
+        let (_, l) = analyse(&tp, 200.0);
+        assert_eq!(l.len(), 1);
+        (l[0].mid(), l[0].len())
+    };
+    let (m, l) = lift(&pr);
+    assert!(m.approx_eq(p(50.0, -3.0), T) && approx(l, 11.0));
+    pr.tools[0].diameter = 10.0;
+    let (m, l) = lift(&pr);
+    assert!(m.approx_eq(p(50.0, -5.0), T) && approx(l, 15.0));
+    op_mut(&mut pr, op).kind = contour_kind(Side::Inside, Direction::Climb);
+    let (m, _) = lift(&pr);
+    assert!(m.approx_eq(p(50.0, 5.0), T));
+}
+
+#[test]
+fn m6_10_open_other_ops_validation() {
+    let mut pr = Project::new();
+    let id = add_c(&mut pr, line(p(0.0, 0.0), p(50.0, 0.0)));
+    let op = add_op(&mut pr, contour_kind(Side::On, Direction::Climb), vec![id]);
+    op_mut(&mut pr, op).tabs = tabs_count(4);
+    let tp = run(&pr, op).unwrap();
+    assert_eq!(tp.notes, [ToolpathNote::TabsOnOpenContour(id)]);
+    assert!(analyse(&tp, 200.0).1.is_empty());
+    assert_eq!(
+        tp.notes[0].to_string(),
+        format!("Item {id} is open: no tabs")
+    );
+
+    let sq = add_c(&mut pr, r_rect());
+    for kind in [OpKind::Engrave, OpKind::Pocket { stepover_pct: 50.0 }] {
+        let op = add_op(&mut pr, kind, vec![sq]);
+        let off = run(&pr, op).unwrap();
+        op_mut(&mut pr, op).tabs = tabs_count(4);
+        let on = run(&pr, op).unwrap();
+        assert_eq!(off, on);
+        assert!(on.notes.is_empty());
+    }
+
+    let (mut pr, _, op) = r_project(Side::Outside, 6.0);
+    let e = |pr: &Project| run(pr, op).unwrap_err();
+    op_mut(&mut pr, op).tabs.width = 0.0;
+    assert_eq!(e(&pr), ToolpathError::InvalidParam("tab_width"));
+    op_mut(&mut pr, op).tabs = Tabs {
+        height: f64::NAN,
+        ..tabs_count(4)
+    };
+    assert_eq!(e(&pr), ToolpathError::InvalidParam("tab_height"));
+    op_mut(&mut pr, op).tabs = Tabs {
+        placement: TabPlacement::Spacing { distance: 0.0 },
+        ..tabs_count(4)
+    };
+    assert_eq!(e(&pr), ToolpathError::InvalidParam("tab_spacing"));
+    // disabled tabs are not validated
+    op_mut(&mut pr, op).tabs.enabled = false;
+    assert!(run(&pr, op).is_ok());
+}
+
+#[test]
+fn m6_11_bracket_outer() {
+    let mut pr = bracket();
+    let (outer_id, outer) = pr
+        .items
+        .iter()
+        .filter(|i| i.layer == "Outline")
+        .filter_map(|i| match &i.geom {
+            Geom::Contour(c) if c.closed => Some((i.id, c.clone())),
+            _ => None,
+        })
+        .max_by(|a, b| a.1.signed_area().abs().total_cmp(&b.1.signed_area().abs()))
+        .unwrap();
+    let d = 6.35;
+    let tabs = tabs_count(4);
+    let (pos, note) = tab_positions(&outer, &tabs, outer_id, d);
+    assert_eq!(note, None);
+    assert_eq!(pos.len(), 4);
+    let m = tabs.width / 2.0 + d;
+    let l = outer.length();
+    for t in &pos {
+        let s = t * l;
+        let mut acc = 0.0;
+        let seg = outer
+            .segments
+            .iter()
+            .find_map(|seg| {
+                let r = (s >= acc && s <= acc + seg.length()).then_some((seg, acc));
+                acc += seg.length();
+                r
+            })
+            .unwrap();
+        assert!(
+            matches!(seg.0, Segment::Line { .. }),
+            "tab on an arc at s {s}"
+        );
+        assert!(s - seg.1 >= m - T && seg.1 + seg.0.length() - s >= m - T);
+    }
+    let op = add_op(
+        &mut pr,
+        contour_kind(Side::Outside, Direction::Climb),
+        vec![outer_id],
+    );
+    op_mut(&mut pr, op).tabs = tabs;
+    let tp = run(&pr, op).unwrap();
+    assert!(tp.notes.is_empty());
+    check_invariants(&pr, &tp);
+}
+
+#[test]
+fn m6_review_r2_z_tab_clamped_to_stock_top() {
+    let (mut pr, _, op) = r_project(Side::Outside, 6.0);
+    let o = op_mut(&mut pr, op);
+    o.depth = 2.0;
+    o.depth_per_pass = 2.0;
+    o.tabs.height = 3.0;
+    let tp = run(&pr, op).unwrap();
+    check_invariants(&pr, &tp);
+    let (_, lifts) = analyse(&tp, 200.0);
+    assert_eq!(lifts.len(), 4);
+    for l in &lifts {
+        assert!(approx(l.z, 0.0), "lift at {}", l.z);
+        assert!(l.vertical_ok && approx(l.len(), 11.0));
+    }
+    assert!(tp.moves.iter().all(|m| match m {
+        Move::Linear { to, .. } | Move::Arc { to, .. } => to.z <= 1e-9,
+        _ => true,
+    }));
+}

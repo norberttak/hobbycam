@@ -135,14 +135,14 @@ fn format_version_variants() {
         with(json!(u64::MAX)),
         Err(ProjectError::VersionTooNew {
             found: u32::MAX,
-            supported: 1
+            supported: 2 // M6: FORMAT_VERSION 2
         })
     ));
     assert!(matches!(
         with(json!(3)),
         Err(ProjectError::VersionTooNew {
             found: 3,
-            supported: 1
+            supported: 2 // M6: FORMAT_VERSION 2
         })
     ));
     // top level not an object
@@ -154,13 +154,13 @@ fn format_version_variants() {
 
 #[test]
 fn version_check_happens_before_shape_check() {
-    // a v2 file with an unknown item type must give the version error, not a JSON error
+    // a v3 file with an unknown item type must give the version error, not a JSON error
     let mut v = golden_value();
-    v["format_version"] = json!(2);
+    v["format_version"] = json!(3); // M6: was 2 (now current)
     v["items"][0]["geom"] = json!({"type": "text", "text": "hi"});
     assert!(matches!(
         Project::from_json(&v.to_string()),
-        Err(ProjectError::VersionTooNew { found: 2, .. })
+        Err(ProjectError::VersionTooNew { found: 3, .. })
     ));
 }
 
@@ -751,4 +751,149 @@ fn drill_peck_none_round_trips() {
     p.operations[1].kind = OpKind::Drill { peck: None };
     let (back, _) = Project::from_json(&p.to_json().unwrap()).unwrap();
     assert_eq!(back, p);
+}
+
+// ---------------------------------------------------------------- M6: format v2, manual tabs
+
+#[test]
+fn m6_v1_load_save_gives_v2() {
+    let p = golden_project();
+    assert_eq!(p.format_version, 2);
+    let text = p.to_json().unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["format_version"], json!(2));
+    for op in v["operations"].as_array().unwrap() {
+        assert_eq!(op["tabs"]["manual"], json!([]));
+    }
+    // round trip through a file
+    let dir = scratch("m6_v1_v2");
+    let path = dir.join("a.hcam");
+    p.save(&path).unwrap();
+    let (back, problems) = Project::from_json(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(problems.is_empty());
+    assert_eq!(back, p);
+}
+
+#[test]
+fn m6_v1_without_tabs_object_and_v1_with_manual() {
+    // missing tabs object: migrate leaves it alone; Operation.tabs is a required field since M3,
+    // so serde reports it (spec M6 "left to serde default" is ambiguous here, see report)
+    let mut v = golden_value();
+    v["operations"][0].as_object_mut().unwrap().remove("tabs");
+    let e = Project::from_json(&v.to_string()).unwrap_err();
+    assert!(
+        matches!(e, ProjectError::Json(_)) && e.to_string().contains("tabs"),
+        "{e}"
+    );
+    // a v1 file that already has a manual list keeps it
+    let mut v = golden_value();
+    v["operations"][0]["tabs"]["manual"] = json!([{"item": 1, "positions": [0.25]}]);
+    let (p, _) = Project::from_json(&v.to_string()).unwrap();
+    assert_eq!(
+        p.operations[0].tabs.manual,
+        [ManualTabs {
+            item: 1,
+            positions: vec![0.25]
+        }]
+    );
+    // a v2 file without manual (hand-edited) loads via serde default
+    let mut v = golden_value();
+    v["format_version"] = json!(2);
+    v["operations"][0]["tabs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("manual");
+    let (p, _) = Project::from_json(&v.to_string()).unwrap();
+    assert!(p.operations[0].tabs.manual.is_empty());
+}
+
+#[test]
+fn m6_v2_unknown_field_and_v3_refused() {
+    let mut v = golden_value();
+    v["format_version"] = json!(2);
+    v["operations"][0]["tabs"]["ramp_angle"] = json!(30.0);
+    v["operations"][0]["tabs"]["manual"] = json!([{"item": 1, "positions": [0.5], "note": "x"}]);
+    let (p, _) = Project::from_json(&v.to_string()).unwrap();
+    assert_eq!(p.operations[0].tabs.manual[0].positions, [0.5]);
+    v["format_version"] = json!(3);
+    assert!(matches!(
+        Project::from_json(&v.to_string()),
+        Err(ProjectError::VersionTooNew {
+            found: 3,
+            supported: 2
+        })
+    ));
+    // migrate is identity for 2 and leaves non-object tabs alone for 1
+    let odd = json!({"operations": [{"tabs": null}, 5]});
+    assert_eq!(migrate(odd.clone(), 1).unwrap(), odd);
+    assert_eq!(migrate(odd.clone(), 0).unwrap(), odd);
+}
+
+#[test]
+fn m6_out_of_range_manual_positions_load() {
+    // spec: positions are used rem_euclid(1.0) by the toolpath; loading does not reject them
+    let mut v = golden_value();
+    v["format_version"] = json!(2);
+    v["operations"][0]["tabs"]["manual"] =
+        json!([{"item": 1, "positions": [0.0, 1.0, -0.25, 7.5, 0.5, 0.5]}]);
+    let (p, problems) = Project::from_json(&v.to_string()).unwrap();
+    assert_eq!(
+        p.operations[0].tabs.manual[0].positions,
+        [0.0, 1.0, -0.25, 7.5, 0.5, 0.5]
+    );
+    eprintln!("problems for out-of-range positions: {problems:?}");
+    // byte-stable re-save
+    let text = p.to_json().unwrap();
+    assert_eq!(Project::from_json(&text).unwrap().0, p);
+    // non-numeric position is a JSON error
+    v["operations"][0]["tabs"]["manual"] = json!([{"item": 1, "positions": ["a"]}]);
+    assert!(Project::from_json(&v.to_string()).is_err());
+}
+
+#[test]
+fn m6_remove_item_cleans_only_that_items_manual_tabs() {
+    let mut p = golden_project();
+    p.operations[0].tabs.manual = vec![
+        ManualTabs {
+            item: 1,
+            positions: vec![0.1],
+        },
+        ManualTabs {
+            item: 2,
+            positions: vec![0.2],
+        },
+        ManualTabs {
+            item: 77, // stale entry, not an item
+            positions: vec![0.3],
+        },
+    ];
+    p.operations[1].tabs.manual = vec![ManualTabs {
+        item: 1,
+        positions: vec![0.4],
+    }];
+    p.remove_item(1);
+    let items: Vec<u64> = p.operations[0].tabs.manual.iter().map(|m| m.item).collect();
+    assert_eq!(items, [2, 77]);
+    assert!(p.operations[1].tabs.manual.is_empty());
+    // removing a non-existent item changes nothing
+    let before = p.clone();
+    p.remove_item(12345);
+    assert_eq!(p, before);
+    // stale entries survive a save/load
+    let (back, _) = Project::from_json(&p.to_json().unwrap()).unwrap();
+    assert_eq!(back.operations[0].tabs.manual.len(), 2);
+}
+
+#[test]
+fn m6_library_rejects_v2() {
+    let dir = scratch("m6_lib_v2");
+    let path = dir.join("tools.json");
+    fs::write(&path, r#"{"format_version": 2, "tools": []}"#).unwrap();
+    assert!(matches!(
+        ToolLibrary::load(&path),
+        Err(ProjectError::VersionTooNew {
+            found: 2,
+            supported: 1
+        })
+    ));
 }

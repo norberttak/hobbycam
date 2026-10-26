@@ -120,7 +120,7 @@ Run before export; errors block export, warnings don't:
 - Pocket/inside contour on an open contour
 - Toolpath outside stock, or deeper than stock thickness (warn: through-cut is often intended)
 - Drill tool diameter ≠ hole diameter (warn); operation references missing tool
-- Tabs on a contour that is not cut through (warn)
+- Tabs on a contour that is not cut through (warn); other tab warnings from `ToolpathNote`s and the list in specs/M6.md
 - **Tests:** one test per rule (positive and negative case).
 
 ### M9 – Simulation (`hc-sim` + canvas)
