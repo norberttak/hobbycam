@@ -1,0 +1,10 @@
+[package]
+name = "hc-dxf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dxf = "0.6.2"
+hc-geom = { version = "0.1.0", path = "../hc-geom" }
