@@ -2,3 +2,4 @@
 .DS_Store
 *.ngc
 /images
+!/tests/fixtures/gcode/*.ngc

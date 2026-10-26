@@ -135,14 +135,14 @@ fn format_version_variants() {
         with(json!(u64::MAX)),
         Err(ProjectError::VersionTooNew {
             found: u32::MAX,
-            supported: 2 // M6: FORMAT_VERSION 2
+            supported: 3 // M7: FORMAT_VERSION 3
         })
     ));
     assert!(matches!(
-        with(json!(3)),
+        with(json!(4)), // M7: was 3
         Err(ProjectError::VersionTooNew {
-            found: 3,
-            supported: 2 // M6: FORMAT_VERSION 2
+            found: 4,
+            supported: 3 // M7: FORMAT_VERSION 3
         })
     ));
     // top level not an object
@@ -156,11 +156,11 @@ fn format_version_variants() {
 fn version_check_happens_before_shape_check() {
     // a v3 file with an unknown item type must give the version error, not a JSON error
     let mut v = golden_value();
-    v["format_version"] = json!(3); // M6: was 2 (now current)
+    v["format_version"] = json!(4); // M7: was 3 (now current)
     v["items"][0]["geom"] = json!({"type": "text", "text": "hi"});
     assert!(matches!(
         Project::from_json(&v.to_string()),
-        Err(ProjectError::VersionTooNew { found: 3, .. })
+        Err(ProjectError::VersionTooNew { found: 4, .. })
     ));
 }
 
@@ -758,10 +758,10 @@ fn drill_peck_none_round_trips() {
 #[test]
 fn m6_v1_load_save_gives_v2() {
     let p = golden_project();
-    assert_eq!(p.format_version, 2);
+    assert_eq!(p.format_version, 3); // M7: was 2
     let text = p.to_json().unwrap();
     let v: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(v["format_version"], json!(2));
+    assert_eq!(v["format_version"], json!(3)); // M7: was 2
     for op in v["operations"].as_array().unwrap() {
         assert_eq!(op["tabs"]["manual"], json!([]));
     }
@@ -815,12 +815,12 @@ fn m6_v2_unknown_field_and_v3_refused() {
     v["operations"][0]["tabs"]["manual"] = json!([{"item": 1, "positions": [0.5], "note": "x"}]);
     let (p, _) = Project::from_json(&v.to_string()).unwrap();
     assert_eq!(p.operations[0].tabs.manual[0].positions, [0.5]);
-    v["format_version"] = json!(3);
+    v["format_version"] = json!(4); // M7: was 3
     assert!(matches!(
         Project::from_json(&v.to_string()),
         Err(ProjectError::VersionTooNew {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
     // migrate is identity for 2 and leaves non-object tabs alone for 1

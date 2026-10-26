@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Current project format version.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 /// Current tool library format version (its schema is unchanged since v1).
 pub const LIBRARY_FORMAT_VERSION: u32 = 1;
 
@@ -33,6 +33,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
 
 /// Upgrade an older project file's JSON to the current format.
 /// v1 → v2: every `operations[].tabs` object gets `"manual": []` (a missing tabs object is left to serde).
+/// v2 → v3: `machine.tool_change_z = max(machine.safe_z, 40)` when absent (missing machine/safe_z is left to serde).
 pub fn migrate(mut value: Value, found: u32) -> Result<Value, ProjectError> {
     if found < 2 {
         if let Some(ops) = value.get_mut("operations").and_then(Value::as_array_mut) {
@@ -40,6 +41,15 @@ pub fn migrate(mut value: Value, found: u32) -> Result<Value, ProjectError> {
                 if let Some(tabs) = op.get_mut("tabs").and_then(Value::as_object_mut) {
                     tabs.entry("manual").or_insert(Value::Array(Vec::new()));
                 }
+            }
+        }
+    }
+    if found < 3 {
+        if let Some(machine) = value.get_mut("machine").and_then(Value::as_object_mut) {
+            if let Some(safe) = machine.get("safe_z").and_then(Value::as_f64) {
+                machine
+                    .entry("tool_change_z")
+                    .or_insert(Value::from(safe.max(40.0)));
             }
         }
     }
@@ -97,5 +107,21 @@ mod tests {
         assert_eq!(m["operations"][1], v["operations"][1]);
         assert_eq!(m["operations"][2], v["operations"][2]);
         assert_eq!(migrate(v.clone(), 2).unwrap(), v);
+    }
+
+    #[test]
+    fn migrate_v2_adds_tool_change_z() {
+        let m = migrate(json!({"machine": {"safe_z": 5.0}}), 2).unwrap();
+        assert_eq!(m["machine"]["tool_change_z"], json!(40.0));
+        let m = migrate(json!({"machine": {"safe_z": 50.0}}), 2).unwrap();
+        assert_eq!(m["machine"]["tool_change_z"], json!(50.0));
+        let keep = json!({"machine": {"safe_z": 5.0, "tool_change_z": 7.0}});
+        assert_eq!(migrate(keep.clone(), 2).unwrap(), keep);
+        // missing machine / safe_z: left to serde
+        let bad = json!({"machine": {"clearance_z": 2.0}});
+        assert_eq!(migrate(bad.clone(), 2).unwrap(), bad);
+        assert_eq!(migrate(json!({}), 2).unwrap(), json!({}));
+        let v3 = json!({"machine": {"safe_z": 5.0}});
+        assert_eq!(migrate(v3.clone(), 3).unwrap(), v3);
     }
 }

@@ -155,6 +155,27 @@ impl App {
         }
     }
 
+    /// Export errors are shown without a dialog; the chosen file name is the base of all segment files.
+    pub fn export_gcode(&mut self) {
+        let Some(files) = self.state.gcode() else {
+            return;
+        };
+        // gcode() succeeded, so the post name is valid
+        let Ok(post) = hc_post::post_for(&self.state.project.machine.post) else {
+            return;
+        };
+        let ext = post.extension();
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("G-code", &[ext])
+            .set_file_name(format!("{}.{ext}", self.state.stem()));
+        if let Some(dir) = self.state.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(base) = dialog.save_file() {
+            self.state.write_gcode(&base, &files);
+        }
+    }
+
     fn guard_modal(&mut self, ctx: &egui::Context) {
         let Some(p) = self.pending else { return };
         let mut choice = None;
@@ -244,5 +265,22 @@ mod kittest {
         h.get_by_label("File").click();
         h.run();
         assert!(h.query_by_label_contains("Import DXF…").is_some());
+    }
+
+    #[test]
+    fn m7_k_export_and_machine_menu() {
+        let mut h = harness();
+        h.get_by_label("File").click();
+        h.run();
+        assert!(h.query_by_label_contains("Export G-code…").is_some());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.get_by_label("Settings").click();
+        h.run();
+        h.get_by_label("Machine").hover();
+        h.run();
+        for name in ["Safe Z", "Clearance Z", "Tool change Z"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
     }
 }

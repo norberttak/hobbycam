@@ -4,8 +4,9 @@ use crate::hit;
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::{BBox, Contour, Point};
+use hc_post::GcodeFile;
 use hc_project::{
-    Direction, Geom, Item, ManualTabs, OpKind, Operation, Problem, Project, Side, Tool,
+    Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Problem, Project, Side, Tool,
     ToolLibrary, Units,
 };
 use hc_toolpath::{Toolpath, ToolpathError};
@@ -348,6 +349,97 @@ impl AppState {
                 false
             }
         }
+    }
+
+    pub fn set_machine(&mut self, m: Machine) {
+        if self.project.machine != m {
+            self.project.machine = m;
+            self.dirty = true;
+        }
+    }
+
+    /// Project file stem, or "untitled".
+    pub fn stem(&self) -> String {
+        self.path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "untitled".to_string())
+    }
+
+    /// The G-code files of the project, or None with an Error message.
+    pub fn gcode(&mut self) -> Option<Vec<GcodeFile>> {
+        match hc_post::export(&self.project, &self.stem()) {
+            Ok(files) => Some(files),
+            Err(e) => {
+                self.msg(Severity::Error, format!("Cannot export G-code: {e}"));
+                None
+            }
+        }
+    }
+
+    /// Writes `<stem><suffix>.<ext>` next to `base` (its extension stripped), in order, stopping at the first failure.
+    pub fn write_gcode(&mut self, base: &Path, files: &[GcodeFile]) -> bool {
+        let ext = match hc_post::post_for(&self.project.machine.post) {
+            Ok(p) => p.extension(),
+            Err(e) => {
+                self.msg(Severity::Error, format!("Cannot export G-code: {e}"));
+                return false;
+            }
+        };
+        let dir = base.parent().unwrap_or(Path::new(""));
+        let stem = base
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut written: Vec<String> = Vec::new();
+        for f in files {
+            let name = format!("{stem}{}.{ext}", f.suffix);
+            if let Err(e) = hc_project::atomic_write(&dir.join(&name), f.text.as_bytes()) {
+                let done = if written.is_empty() {
+                    "none".to_string()
+                } else {
+                    written.join(", ")
+                };
+                self.msg(
+                    Severity::Error,
+                    format!("Cannot write {name}: {e}. Written: {done}"),
+                );
+                return false;
+            }
+            written.push(name);
+        }
+        self.msg(
+            Severity::Info,
+            format!("Exported {} file(s): {}", written.len(), written.join(", ")),
+        );
+        // never deleted: an old "file 3 of 3" would machine the wrong part, so name them
+        let single = format!("{stem}.{ext}");
+        let (prefix, dot_ext) = (format!("{stem}_"), format!(".{ext}"));
+        let mut stale: Vec<String> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                    .filter(|n| !written.contains(n))
+                    .filter(|n| {
+                        *n == single
+                            || n.strip_prefix(&prefix)
+                                .and_then(|r| r.strip_suffix(&dot_ext))
+                                .is_some_and(|mid| mid.contains("_T"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !stale.is_empty() {
+            stale.sort();
+            self.msg(
+                Severity::Warning,
+                format!(
+                    "Older files from a previous export are still in the folder: {}",
+                    stale.join(", ")
+                ),
+            );
+        }
+        true
     }
 
     pub fn set_units(&mut self, u: Units) {
@@ -1656,5 +1748,178 @@ mod edge_tests {
         s.delete_tab(1, 1); // the selected one
         assert_eq!(s.selected_tab, None);
         assert_eq!(s.project.operations[0].tabs.manual[0].positions.len(), 1);
+    }
+
+    // ---------------------------------------------------------------- M7
+
+    #[test]
+    fn m7_t14_gcode_export() {
+        let mut s = AppState::new(None);
+        s.open_cli(&bracket_path());
+        // failing enabled op: too large tool for an inside contour
+        let hole = s
+            .project
+            .items
+            .iter()
+            .find(|i| matches!(&i.geom, Geom::Contour(c) if c.as_circle().is_some()))
+            .unwrap()
+            .id;
+        let mut big = tool(9);
+        big.diameter = 500.0;
+        s.library.add(big).unwrap();
+        s.selection = [hole].into_iter().collect();
+        let op = s.new_operation(NewKind::Contour, 9).unwrap();
+        let mut o = s
+            .project
+            .operations
+            .iter()
+            .find(|o| o.id == op)
+            .unwrap()
+            .clone();
+        o.kind = OpKind::Contour {
+            side: Side::Inside,
+            direction: Direction::Climb,
+        };
+        s.update_op(o);
+        let before = s.messages.len();
+        assert!(s.gcode().is_none());
+        assert_eq!(s.messages.len(), before + 1);
+        let m = s.messages.last().unwrap();
+        assert_eq!(m.severity, Severity::Error);
+        assert!(
+            m.text.starts_with("Cannot export G-code: Operation"),
+            "{}",
+            m.text
+        );
+
+        // two files written next to the chosen base name
+        let dir = scratch("m7_t14");
+        let files = vec![
+            GcodeFile {
+                suffix: "_1_T1".into(),
+                text: "a\n".into(),
+            },
+            GcodeFile {
+                suffix: "_2_T2".into(),
+                text: "b\n".into(),
+            },
+        ];
+        let dirty = s.dirty;
+        let path = s.path.clone();
+        assert!(s.write_gcode(&dir.join("out.ngc"), &files));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out_1_T1.ngc")).unwrap(),
+            "a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out_2_T2.ngc")).unwrap(),
+            "b\n"
+        );
+        assert_eq!(
+            *s.messages.last().unwrap(),
+            Message {
+                severity: Severity::Info,
+                text: "Exported 2 file(s): out_1_T1.ngc, out_2_T2.ngc".into()
+            }
+        );
+        assert_eq!((s.dirty, &s.path), (dirty, &path));
+
+        // missing directory
+        assert!(!s.write_gcode(&dir.join("nope").join("out.ngc"), &files));
+        let m = s.messages.last().unwrap();
+        assert_eq!(m.severity, Severity::Error);
+        assert!(
+            m.text.starts_with("Cannot write out_1_T1.ngc: "),
+            "{}",
+            m.text
+        );
+        assert!(m.text.ends_with("Written: none"), "{}", m.text);
+
+        // set_machine: dirty only on change
+        let mut s = AppState::new(None);
+        let m = s.project.machine.clone();
+        s.set_machine(m.clone());
+        assert!(!s.dirty);
+        s.set_machine(Machine {
+            tool_change_z: 50.0,
+            ..m
+        });
+        assert!(s.dirty);
+        assert_eq!(s.project.machine.tool_change_z, 50.0);
+    }
+
+    #[test]
+    fn m7_gcode_ok_uses_project_stem() {
+        let mut s = AppState::new(None);
+        s.open_cli(&bracket_path());
+        let hole = s
+            .project
+            .items
+            .iter()
+            .find(|i| matches!(&i.geom, Geom::Contour(c) if c.as_circle().is_some()))
+            .unwrap()
+            .id;
+        s.library.add(tool(1)).unwrap();
+        s.selection = [hole].into_iter().collect();
+        s.new_operation(NewKind::Drill, 1).unwrap();
+        let files = s.gcode().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].text.starts_with("(untitled - file 1 of 1)\n"));
+        s.path = Some(PathBuf::from("/x/My part.hcam"));
+        assert!(s.gcode().unwrap()[0]
+            .text
+            .starts_with("(My part - file 1 of 1)\n"));
+    }
+
+    #[test]
+    fn m7_stale_files_warning() {
+        let dir = scratch("m7_stale");
+        let base = dir.join("out.ngc");
+        let seg = |k: usize, t: u32| GcodeFile {
+            suffix: format!("_{k}_T{t}"),
+            text: format!("{k}\n"),
+        };
+        let mut s = AppState::new(None);
+        assert!(s.write_gcode(&base, &[seg(1, 1), seg(2, 2), seg(3, 1)]));
+        assert_eq!(s.messages.last().unwrap().severity, Severity::Info);
+        // unrelated files and other stems are never listed
+        std::fs::write(dir.join("other_1_T1.ngc"), "x").unwrap();
+        std::fs::write(dir.join("out_notes.ngc"), "x").unwrap();
+        std::fs::write(dir.join("out.txt"), "x").unwrap();
+        // second export overwrites 1 and 2 (leaving .bak files) and leaves 3 behind
+        assert!(s.write_gcode(&base, &[seg(1, 1), seg(2, 2)]));
+        assert!(dir.join("out_1_T1.ngc.bak").exists());
+        let n = s.messages.len();
+        assert_eq!(s.messages[n - 2].severity, Severity::Info);
+        assert_eq!(
+            s.messages[n - 1],
+            Message {
+                severity: Severity::Warning,
+                text: "Older files from a previous export are still in the folder: out_3_T1.ngc"
+                    .into()
+            }
+        );
+        assert!(dir.join("out_3_T1.ngc").exists()); // nothing deleted
+                                                    // a single-file export next to segment files lists them all, and vice versa
+        assert!(s.write_gcode(
+            &base,
+            &[GcodeFile {
+                suffix: String::new(),
+                text: "s\n".into()
+            }]
+        ));
+        assert!(s
+            .messages
+            .last()
+            .unwrap()
+            .text
+            .ends_with(": out_1_T1.ngc, out_2_T2.ngc, out_3_T1.ngc"));
+        assert!(s.write_gcode(&base, &[seg(1, 1), seg(2, 2), seg(3, 1)]));
+        assert!(s.messages.last().unwrap().text.ends_with("folder: out.ngc"));
+        // no stale files → no warning
+        let clean = scratch("m7_stale_clean");
+        let n = s.messages.len();
+        assert!(s.write_gcode(&clean.join("out.ngc"), &[seg(1, 1)]));
+        assert_eq!(s.messages.len(), n + 1);
     }
 }

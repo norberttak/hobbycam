@@ -49,6 +49,7 @@ const SC_SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui
 const SC_SAVE_AS: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::S);
 const SC_IMPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::I);
+const SC_EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::E);
 
 pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     // Shift+S first: consume_shortcut ignores extra modifiers
@@ -65,6 +66,9 @@ pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     }
     if ctx.input_mut(|i| i.consume_shortcut(&SC_IMPORT)) {
         app.import_dxf();
+    }
+    if ctx.input_mut(|i| i.consume_shortcut(&SC_EXPORT)) {
+        app.export_gcode();
     }
 }
 
@@ -97,6 +101,9 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 if item(ui, "Import DXF…", Some(&SC_IMPORT)) {
                     app.import_dxf();
                 }
+                if item(ui, "Export G-code…", Some(&SC_EXPORT)) {
+                    app.export_gcode();
+                }
                 ui.separator();
                 if item(ui, "Quit", None) {
                     app.request(&ctx, Pending::Quit);
@@ -120,6 +127,22 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                     if ui.radio(u == Units::Inch, "inch").clicked() {
                         app.state.set_units(Units::Inch);
                     }
+                });
+                ui.menu_button("Machine", |ui| {
+                    let u = app.state.project.units;
+                    let mut m = app.state.project.machine.clone();
+                    egui::Grid::new("machine").show(ui, |ui| {
+                        for (name, v) in [
+                            ("Safe Z", &mut m.safe_z),
+                            ("Clearance Z", &mut m.clearance_z),
+                            ("Tool change Z", &mut m.tool_change_z),
+                        ] {
+                            let l = ui.label(name);
+                            length_field(ui, v, u, Quantity::Length).labelled_by(l.id);
+                            ui.end_row();
+                        }
+                    });
+                    app.state.set_machine(m);
                 });
                 if ui.button("Tool library…").clicked() {
                     app.tool_dialog.open = true;

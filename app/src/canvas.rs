@@ -197,7 +197,8 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
         4.0,
     ));
 
-    // origin marker
+    // origin marker at the G-code work zero
+    let o = v.world_to_screen(rect, hc_post::work_origin(&s.project));
     painter.arrow(o, Vec2::new(20.0, 0.0), Stroke::new(2.0, red));
     painter.arrow(o, Vec2::new(0.0, -20.0), Stroke::new(2.0, green));
 

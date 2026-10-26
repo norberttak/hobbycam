@@ -1624,6 +1624,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hc-post"
+version = "0.1.0"
+dependencies = [
+ "hc-geom",
+ "hc-project",
+ "hc-toolpath",
+]
+
+[[package]]
 name = "hc-project"
 version = "0.1.0"
 dependencies = [
@@ -1664,6 +1673,7 @@ dependencies = [
  "egui_kittest",
  "hc-dxf",
  "hc-geom",
+ "hc-post",
  "hc-project",
  "hc-toolpath",
  "rfd",

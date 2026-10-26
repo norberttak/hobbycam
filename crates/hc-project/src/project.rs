@@ -29,6 +29,8 @@ pub struct Stock {
 pub struct Machine {
     pub safe_z: f64,
     pub clearance_z: f64,
+    /// Z the program ends at so the bit can be swapped by hand; must be >= safe_z.
+    pub tool_change_z: f64,
     pub post: String,
 }
 
@@ -196,6 +198,7 @@ impl Project {
             machine: Machine {
                 safe_z: 5.0,
                 clearance_z: 2.0,
+                tool_change_z: 40.0,
                 post: "linuxcnc".to_string(),
             },
             layers: Vec::new(),
