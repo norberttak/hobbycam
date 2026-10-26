@@ -66,6 +66,7 @@ impl App {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.state.refresh_toolpaths();
         let ctx = ui.ctx().clone();
         let title = self.state.title();
         if title != self.title {
@@ -213,7 +214,7 @@ mod kittest {
     #[test]
     fn ui_glyphs_in_default_fonts() {
         let mut h = Harness::new_ui(|ui| {
-            ui.label("° × Ø – …");
+            ui.label("° × Ø – … ·");
         });
         h.run();
     }

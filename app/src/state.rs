@@ -4,7 +4,8 @@ use crate::hit;
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::{BBox, Point};
-use hc_project::{Direction, Geom, Item, OpKind, Problem, Project, Side, Tool, ToolLibrary, Units};
+use hc_project::{Direction, Item, OpKind, Problem, Project, Side, Tool, ToolLibrary, Units};
+use hc_toolpath::{Toolpath, ToolpathError};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -96,6 +97,12 @@ pub struct AppState {
     pub cursor: Option<Point>,
     /// Parallel to `project.items`.
     pub item_bbox: Vec<BBox>,
+    /// One entry per enabled operation, in order (see `refresh_toolpaths`).
+    pub toolpaths: Vec<(u64, Result<Toolpath, ToolpathError>)>,
+    /// The project `toolpaths` were generated from.
+    pub toolpaths_for: Option<Project>,
+    /// Not saved.
+    pub show_toolpaths: bool,
 }
 
 impl AppState {
@@ -129,6 +136,9 @@ impl AppState {
             fit_pending: true,
             cursor: None,
             item_bbox: Vec::new(),
+            toolpaths: Vec::new(),
+            toolpaths_for: None,
+            show_toolpaths: true,
         };
         if let Some(e) = s.library_error.clone() {
             s.msg(Severity::Error, format!("Tool library: {e}"));
@@ -141,6 +151,22 @@ impl AppState {
             severity,
             text: text.into(),
         });
+    }
+
+    /// Regenerates the toolpaths when the project differs from the one they were made for.
+    /// shortcut: whole-project compare + full regeneration, may lag on huge fine pockets; upgrade to a per-op cache keyed by op + items + tool.
+    pub fn refresh_toolpaths(&mut self) {
+        if self.toolpaths_for.as_ref() != Some(&self.project) {
+            self.toolpaths = hc_toolpath::generate(&self.project);
+            self.toolpaths_for = Some(self.project.clone());
+        }
+    }
+
+    pub fn toolpath_result(&self, op: u64) -> Option<&Result<Toolpath, ToolpathError>> {
+        self.toolpaths
+            .iter()
+            .find(|(id, _)| *id == op)
+            .map(|(_, r)| r)
     }
 
     pub fn title(&self) -> String {
@@ -230,6 +256,8 @@ impl AppState {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let ids = self.project.add_dxf(&imp, &file);
+        self.items_changed();
+        self.fit_stock_to_items();
         for w in &imp.warnings {
             self.msg(Severity::Warning, warning_text(w));
         }
@@ -248,9 +276,22 @@ impl AppState {
             self.msg(Severity::Warning, format!("{file}: no geometry imported"));
         }
         self.dirty = true;
-        self.items_changed();
         self.fit_pending = true;
         true
+    }
+
+    /// First import into an untouched project: stock = drawing bbox (thickness and origin kept).
+    fn fit_stock_to_items(&mut self) {
+        let b = self.items_bbox();
+        let untouched =
+            self.project.stock == Project::new().stock && self.project.operations.is_empty();
+        if untouched && !b.is_empty() && b.width() > 0.0 && b.height() > 0.0 {
+            let s = &mut self.project.stock;
+            s.min_x = b.min.x;
+            s.min_y = b.min.y;
+            s.width = b.width();
+            s.height = b.height();
+        }
     }
 
     /// `hobbycam <file>` argument.
@@ -569,21 +610,6 @@ impl AppState {
     }
 }
 
-/// Ø of a contour that is one full-circle arc.
-pub fn circle_diameter(item: &Item) -> Option<f64> {
-    match &item.geom {
-        Geom::Contour(c) => match c.segments[..] {
-            [hc_geom::Segment::Arc { radius, sweep, .. }]
-                if (sweep.abs() - std::f64::consts::TAU).abs() < 1e-9 =>
-            {
-                Some(2.0 * radius)
-            }
-            _ => None,
-        },
-        Geom::Point(_) => None,
-    }
-}
-
 pub fn warning_text(w: &ImportWarning) -> String {
     match w {
         ImportWarning::UnitsAssumedMm { insunits } => {
@@ -719,6 +745,72 @@ pub(crate) mod tests {
         assert_eq!(s.project, before);
         assert_eq!(s.messages.len(), n + 1);
         assert_eq!(s.messages.last().unwrap().severity, Severity::Error);
+    }
+
+    /// M5 acceptance test 16.
+    #[test]
+    fn m5_t16_stock_fit_and_auto_regeneration() {
+        let mut s = AppState::new(None);
+        assert!(s.import_dxf(&bracket_path()));
+        let st = &s.project.stock;
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert!(near(st.min_x, -12.7) && near(st.min_y, -12.7));
+        assert!(near(st.width, 469.9) && near(st.height, 203.2));
+        assert_eq!(st.thickness, 10.0);
+        assert_eq!(st.origin, Project::new().stock.origin);
+
+        // edited stock: a second import into a new project keeps it
+        let mut s2 = AppState::new(None);
+        s2.project.stock.thickness = 12.0;
+        let edited = s2.project.stock.clone();
+        s2.import_dxf(&bracket_path());
+        assert_eq!(s2.project.stock, edited);
+        // an operation present: unchanged as well
+        let mut s3 = AppState::new(None);
+        s3.library.add(tool(1)).unwrap();
+        s3.import_dxf(&bracket_path());
+        s3.project.stock = Project::new().stock;
+        s3.selection.insert(1);
+        s3.new_operation(NewKind::Engrave, 1).unwrap();
+        s3.import_dxf(&bracket_path());
+        assert_eq!(s3.project.stock, Project::new().stock);
+
+        // auto regeneration
+        s.library.add(tool(1)).unwrap();
+        s.refresh_toolpaths();
+        assert!(s.toolpaths.is_empty());
+        let item = s
+            .project
+            .items
+            .iter()
+            .find(|i| matches!(i.geom, hc_project::Geom::Contour(_)))
+            .unwrap()
+            .id;
+        s.selection.insert(item);
+        let id = s.new_operation(NewKind::Engrave, 1).unwrap();
+        s.refresh_toolpaths();
+        assert_eq!(s.toolpaths.len(), 1);
+        assert_eq!(s.toolpaths[0].0, id);
+        let min_z = |s: &AppState| {
+            let tp = s.toolpath_result(id).unwrap().as_ref().unwrap();
+            tp.moves
+                .iter()
+                .filter_map(|m| match m {
+                    hc_toolpath::Move::Linear { to, .. } => Some(to.z),
+                    _ => None,
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!((min_z(&s) + 0.8).abs() < 1e-9);
+        let mut op = s.project.operations[0].clone();
+        op.depth = 2.5;
+        s.update_op(op.clone());
+        s.refresh_toolpaths();
+        assert!((min_z(&s) + 2.5).abs() < 1e-9);
+        op.enabled = false;
+        s.update_op(op);
+        s.refresh_toolpaths();
+        assert!(s.toolpaths.is_empty());
     }
 
     #[test]
@@ -861,6 +953,7 @@ pub(crate) mod tests {
 mod edge_tests {
     use super::tests::{bracket_path, scratch, tool};
     use super::*;
+    use hc_project::Geom;
 
     fn loaded(lib_tools: &[u32]) -> AppState {
         let mut s = AppState::new(None);

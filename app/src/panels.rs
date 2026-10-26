@@ -1,6 +1,6 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
-use crate::state::{circle_diameter, kind_label, MoveDir, NewKind, Severity};
+use crate::state::{kind_label, MoveDir, NewKind, Severity};
 use crate::{aci, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
 use hc_project::{from_display, parse_length, to_display, Direction, Geom, OpKind, Side, Units};
@@ -107,6 +107,7 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 {
                     app.state.fit_pending = true;
                 }
+                ui.checkbox(&mut app.state.show_toolpaths, "Show toolpaths");
             });
             ui.menu_button("Settings", |ui| {
                 ui.menu_button("Units", |ui| {
@@ -230,10 +231,19 @@ fn operations(app: &mut App, ui: &mut Ui) {
     for op in &app.state.project.operations {
         ui.horizontal(|ui| {
             let mut en = op.enabled;
-            if ui.checkbox(&mut en, "").changed() {
+            let r = ui.checkbox(&mut en, "");
+            let label = format!("Enable {}", op.name);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, en, &label));
+            if r.changed() {
                 act = Some(Act::Enable(op.id, en));
             }
-            let text = format!("{}  {}  T{}", op.name, kind_label(&op.kind), op.tool);
+            // kind only when the name doesn't already say it (default names do: "Contour 1")
+            let kind = kind_label(&op.kind);
+            let text = if op.name.starts_with(kind) {
+                format!("{} · T{}", op.name, op.tool)
+            } else {
+                format!("{} · {} · T{}", op.name, kind, op.tool)
+            };
             if ui
                 .selectable_label(app.state.selected_op == Some(op.id), text)
                 .clicked()
@@ -250,6 +260,9 @@ fn operations(app: &mut App, ui: &mut Ui) {
                 act = Some(Act::Delete(op.id));
             }
         });
+        if let Some(Err(e)) = app.state.toolpath_result(op.id) {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Error: {e}"));
+        }
     }
     match act {
         Some(Act::Select(id)) => app.state.select_op(id),
@@ -321,14 +334,16 @@ fn tool_combo(ui: &mut Ui, id: &str, tool: &mut u32, tools: &[hc_project::Tool])
             format!("T{} {}", t.id, t.name)
         });
     ui.horizontal(|ui| {
-        ui.label("Tool");
+        let l = ui.label("Tool");
         egui::ComboBox::from_id_salt(id)
             .selected_text(text)
             .show_ui(ui, |ui| {
                 for t in tools {
                     ui.selectable_value(tool, t.id, format!("T{} {}", t.id, t.name));
                 }
-            });
+            })
+            .response
+            .labelled_by(l.id);
     });
 }
 
@@ -356,11 +371,11 @@ fn op_props(app: &mut App, ui: &mut Ui, mut op: hc_project::Operation) {
     let tools = app.state.available_tools();
     let (mut defaults, mut use_sel) = (false, false);
     egui::Grid::new("op_props").num_columns(2).show(ui, |ui| {
-        ui.label("Name");
-        ui.text_edit_singleline(&mut op.name);
+        let l = ui.label("Name");
+        ui.text_edit_singleline(&mut op.name).labelled_by(l.id);
         ui.end_row();
-        ui.label("Enabled");
-        ui.checkbox(&mut op.enabled, "");
+        let l = ui.label("Enabled");
+        ui.checkbox(&mut op.enabled, "").labelled_by(l.id);
         ui.end_row();
         ui.label("Kind");
         ui.label(kind_label(&op.kind));
@@ -368,62 +383,68 @@ fn op_props(app: &mut App, ui: &mut Ui, mut op: hc_project::Operation) {
         match &mut op.kind {
             OpKind::Engrave => {}
             OpKind::Contour { side, direction } => {
-                ui.label("Side");
+                let l = ui.label("Side");
                 egui::ComboBox::from_id_salt("side")
                     .selected_text(format!("{side:?}"))
                     .show_ui(ui, |ui| {
                         for s in [Side::Outside, Side::Inside, Side::On] {
                             ui.selectable_value(side, s, format!("{s:?}"));
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(l.id);
                 ui.end_row();
-                ui.label("Direction");
+                let l = ui.label("Direction");
                 egui::ComboBox::from_id_salt("dir")
                     .selected_text(format!("{direction:?}"))
                     .show_ui(ui, |ui| {
                         for d in [Direction::Climb, Direction::Conventional] {
                             ui.selectable_value(direction, d, format!("{d:?}"));
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(l.id);
                 ui.end_row();
             }
             OpKind::Pocket { stepover_pct } => {
-                ui.label("Stepover");
+                let l = ui.label("Stepover");
                 ui.add(
                     egui::DragValue::new(stepover_pct)
                         .range(1.0..=100.0)
                         .suffix(" %"),
-                );
+                )
+                .labelled_by(l.id);
                 ui.end_row();
             }
             OpKind::Drill { peck } => {
-                ui.label("Peck");
+                let l = ui.label("Peck");
                 ui.horizontal(|ui| {
                     let mut on = peck.is_some();
-                    if ui.checkbox(&mut on, "").changed() {
+                    if ui.checkbox(&mut on, "").labelled_by(l.id).changed() {
                         *peck = on.then_some(op.depth_per_pass);
                     }
                     if let Some(p) = peck {
-                        length_field(ui, p, u, Quantity::Length);
+                        length_field(ui, p, u, Quantity::Length).labelled_by(l.id);
                     }
                 });
                 ui.end_row();
             }
         }
-        ui.label("Depth");
-        length_field(ui, &mut op.depth, u, Quantity::Length);
+        let l = ui.label("Depth");
+        length_field(ui, &mut op.depth, u, Quantity::Length).labelled_by(l.id);
         ui.end_row();
-        ui.label("Depth/pass");
-        length_field(ui, &mut op.depth_per_pass, u, Quantity::Length);
+        let l = ui.label("Depth/pass");
+        length_field(ui, &mut op.depth_per_pass, u, Quantity::Length).labelled_by(l.id);
         ui.end_row();
-        ui.label("Feed");
-        length_field(ui, &mut op.feed, u, Quantity::Feed);
+        let l = ui.label("Feed");
+        length_field(ui, &mut op.feed, u, Quantity::Feed).labelled_by(l.id);
         ui.end_row();
-        ui.label("Plunge feed");
-        length_field(ui, &mut op.plunge_feed, u, Quantity::Feed);
+        let l = ui.label("Plunge feed");
+        length_field(ui, &mut op.plunge_feed, u, Quantity::Feed).labelled_by(l.id);
         ui.end_row();
-        ui.label("RPM");
-        ui.add(egui::DragValue::new(&mut op.rpm).range(0..=100_000));
+        let l = ui.label("RPM");
+        ui.add(egui::DragValue::new(&mut op.rpm).range(0..=100_000))
+            .labelled_by(l.id);
         ui.end_row();
     });
     tool_combo(ui, "op_tool", &mut op.tool, &tools);
@@ -477,9 +498,9 @@ fn selection_props(app: &mut App, ui: &mut Ui) {
                 ui.label("Size");
                 ui.label(format!("{} × {}", len(b.width()), len(b.height())));
                 ui.end_row();
-                if let Some(d) = circle_diameter(it) {
+                if let Some(circle) = c.as_circle() {
                     ui.label("Ø");
-                    ui.label(len(d));
+                    ui.label(len(2.0 * circle.radius));
                     ui.end_row();
                 }
             }

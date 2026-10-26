@@ -1,0 +1,714 @@
+//! M5 acceptance tests (specs/M5.md), one test per item (16 and 17 live in the app).
+//! Machine safe 5, clearance 2; tool T1 flat Ø6 unless noted.
+
+use hc_geom::{Circle, Contour, Orientation, Point, Segment};
+use hc_project::{Direction, Geom, Item, OpKind, Project, Side, Source, Tool, ToolKind};
+use hc_toolpath::*;
+use std::f64::consts::{PI, TAU};
+
+const T: f64 = 1e-6;
+const BRACKET: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/dxf/autocad2018_bracket_inch.dxf"
+);
+
+fn p(x: f64, y: f64) -> Point {
+    Point::new(x, y)
+}
+
+fn tool(id: u32, d: f64) -> Tool {
+    Tool {
+        id,
+        name: format!("Flat {id}"),
+        kind: ToolKind::FlatEndMill,
+        diameter: d,
+        flute_length: 20.0,
+        flutes: 2,
+        feed: 800.0,
+        plunge_feed: 200.0,
+        rpm: 18000,
+        depth_per_pass: 2.0,
+        stepover_pct: 50.0,
+        comment: String::new(),
+    }
+}
+
+fn rect(x0: f64, y0: f64, w: f64, h: f64) -> Contour {
+    let v = [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)];
+    Contour::from_bulge_vertices(&v.map(|(x, y)| (p(x, y), 0.0)), true)
+}
+
+fn circle(x: f64, y: f64, d: f64) -> Contour {
+    Circle {
+        center: p(x, y),
+        radius: d / 2.0,
+    }
+    .to_contour()
+}
+
+fn line(a: Point, b: Point) -> Contour {
+    Contour::from_bulge_vertices(&[(a, 0.0), (b, 0.0)], false)
+}
+
+fn add(pr: &mut Project, geom: Geom) -> u64 {
+    let id = pr.next_id;
+    pr.next_id += 1;
+    pr.items.push(Item {
+        id,
+        layer: "0".into(),
+        source: Source::Drawn,
+        geom,
+    });
+    id
+}
+
+fn add_c(pr: &mut Project, c: Contour) -> u64 {
+    add(pr, Geom::Contour(c))
+}
+
+/// New op with T1 Ø6 (added to the project if needed), depth 5, dpp 2, feed 800, plunge 200.
+fn add_op(pr: &mut Project, kind: OpKind, items: Vec<u64>) -> u64 {
+    let t = pr.tools.first().cloned().unwrap_or_else(|| tool(1, 6.0));
+    let id = pr.add_operation("op", kind, &t, items);
+    let op = pr.operations.last_mut().unwrap();
+    op.depth = 5.0;
+    id
+}
+
+fn op_mut(pr: &mut Project, id: u64) -> &mut hc_project::Operation {
+    pr.operations.iter_mut().find(|o| o.id == id).unwrap()
+}
+
+fn run(pr: &Project, id: u64) -> Result<Toolpath, ToolpathError> {
+    generate_op(pr, pr.operations.iter().find(|o| o.id == id).unwrap())
+}
+
+fn contour_kind(side: Side, direction: Direction) -> OpKind {
+    OpKind::Contour { side, direction }
+}
+
+fn arc_sweep(from: Point, to: Point, center: Point, ccw: bool) -> f64 {
+    let a0 = (from.y - center.y).atan2(from.x - center.x);
+    let a1 = (to.y - center.y).atan2(to.x - center.x);
+    if ccw {
+        (a1 - a0).rem_euclid(TAU)
+    } else {
+        -(a0 - a1).rem_euclid(TAU)
+    }
+}
+
+/// XY cut runs: every plunge starts a new run; feed moves with XY motion become segments.
+fn cut_runs(tp: &Toolpath) -> Vec<(f64, Contour)> {
+    let mut runs: Vec<(f64, Vec<Segment>)> = Vec::new();
+    let mut pos = Point3 {
+        x: f64::NAN,
+        y: f64::NAN,
+        z: f64::NAN,
+    };
+    for m in &tp.moves {
+        match m {
+            Move::Rapid(to) => pos = *to,
+            Move::Linear { to, .. } => {
+                if to.z < pos.z - 1e-9 {
+                    runs.push((to.z, Vec::new()));
+                } else if !to.xy().approx_eq(pos.xy(), 1e-9) {
+                    runs.last_mut().unwrap().1.push(Segment::Line {
+                        start: pos.xy(),
+                        end: to.xy(),
+                    });
+                }
+                pos = *to;
+            }
+            Move::Arc {
+                to, center, ccw, ..
+            } => {
+                let from = pos.xy();
+                let d = from - *center;
+                runs.last_mut().unwrap().1.push(Segment::Arc {
+                    center: *center,
+                    radius: d.length(),
+                    start_angle: d.y.atan2(d.x),
+                    sweep: arc_sweep(from, to.xy(), *center, *ccw),
+                });
+                pos = *to;
+            }
+            Move::Drill { .. } => {}
+        }
+    }
+    runs.into_iter()
+        .map(|(z, segments)| {
+            let closed = segments
+                .first()
+                .unwrap()
+                .start()
+                .approx_eq(segments.last().unwrap().end(), T);
+            (z, Contour { segments, closed })
+        })
+        .collect()
+}
+
+fn radius_of(c: &Contour) -> f64 {
+    c.bbox().width() / 2.0
+}
+
+#[test]
+fn t01_offset_square() {
+    let sq = rect(0.0, 0.0, 20.0, 20.0);
+    let r = offset_closed(&sq, 3.0);
+    assert_eq!(r.len(), 1);
+    let c = &r[0];
+    assert!(c.closed);
+    let lines = c
+        .segments
+        .iter()
+        .filter(|s| matches!(s, Segment::Line { .. }))
+        .count();
+    let arcs: Vec<f64> = c
+        .segments
+        .iter()
+        .filter_map(|s| match *s {
+            Segment::Arc { radius, .. } => Some(radius),
+            _ => None,
+        })
+        .collect();
+    assert_eq!((lines, arcs.len()), (4, 4));
+    assert!(arcs.iter().all(|r| (r - 3.0).abs() < T));
+    assert!((c.signed_area().abs() - 668.274334).abs() < T);
+    assert!((c.signed_area().abs() - (400.0 + 240.0 + 9.0 * PI)).abs() < 1e-9);
+    let b = c.bbox();
+    assert!(b.min.approx_eq(p(-3.0, -3.0), T) && b.max.approx_eq(p(23.0, 23.0), T));
+    assert_eq!(c.orientation(), Some(Orientation::Ccw));
+
+    let mut cw = sq.clone();
+    cw.reverse();
+    let r2 = offset_closed(&cw, 3.0);
+    assert_eq!(r2.len(), 1);
+    assert!((r2[0].signed_area() - c.signed_area()).abs() < T);
+
+    let r3 = offset_closed(&sq, -3.0);
+    assert_eq!(r3.len(), 1);
+    assert!((r3[0].signed_area() - 196.0).abs() < T);
+    assert_eq!(r3[0].segments.len(), 4);
+    assert!(r3[0]
+        .segments
+        .iter()
+        .all(|s| matches!(s, Segment::Line { .. })));
+    let b = r3[0].bbox();
+    assert!((b.width() - 14.0).abs() < T && (b.height() - 14.0).abs() < T);
+}
+
+#[test]
+fn t02_offset_circle() {
+    let r = offset_closed(&circle(0.0, 0.0, 20.0), -3.0);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].segments.len(), 2);
+    for s in &r[0].segments {
+        let Segment::Arc { radius, center, .. } = *s else {
+            panic!("expected arcs")
+        };
+        assert!((radius - 7.0).abs() < T && center.approx_eq(p(0.0, 0.0), T));
+    }
+    assert!((r[0].signed_area() - 49.0 * PI).abs() < T);
+    assert!(offset_closed(&circle(0.0, 0.0, 5.0), -3.0).is_empty());
+}
+
+#[test]
+fn t03_direction() {
+    for stored_cw in [false, true] {
+        let mut sq = rect(0.0, 0.0, 20.0, 20.0);
+        if stored_cw {
+            sq.reverse();
+        }
+        let cases = [
+            (Side::Outside, Direction::Climb, Orientation::Cw),
+            (Side::Outside, Direction::Conventional, Orientation::Ccw),
+            (Side::Inside, Direction::Climb, Orientation::Ccw),
+            (Side::Inside, Direction::Conventional, Orientation::Cw),
+        ];
+        for (side, dir, want) in cases {
+            let mut pr = Project::new();
+            let id = add_c(&mut pr, sq.clone());
+            let op = add_op(&mut pr, contour_kind(side, dir), vec![id]);
+            let runs = cut_runs(&run(&pr, op).unwrap());
+            assert_eq!(
+                runs[0].1.orientation(),
+                Some(want),
+                "{side:?} {dir:?} cw={stored_cw}"
+            );
+        }
+    }
+    for (dir, sign) in [(Direction::Climb, 1.0), (Direction::Conventional, -1.0)] {
+        let mut pr = Project::new();
+        let id = add_c(&mut pr, line(p(0.0, 0.0), p(10.0, 0.0)));
+        let op = add_op(&mut pr, contour_kind(Side::On, dir), vec![id]);
+        let runs = cut_runs(&run(&pr, op).unwrap());
+        let s = &runs[0].1.segments[0];
+        assert!((s.end().x - s.start().x) * sign > 0.0, "{dir:?}");
+    }
+}
+
+#[test]
+fn t04_offset_vanished_is_per_op() {
+    let mut pr = Project::new();
+    let small = add_c(&mut pr, circle(0.0, 0.0, 5.0));
+    let sq = add_c(&mut pr, rect(10.0, 10.0, 20.0, 20.0));
+    let a = add_op(
+        &mut pr,
+        contour_kind(Side::Inside, Direction::Climb),
+        vec![small],
+    );
+    let b = add_op(
+        &mut pr,
+        contour_kind(Side::Outside, Direction::Climb),
+        vec![sq],
+    );
+    let all = generate(&pr);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0], (a, Err(ToolpathError::OffsetVanished(small))));
+    assert_eq!(all[1].0, b);
+    assert!(all[1].1.is_ok());
+}
+
+#[test]
+fn t05_pocket_ring_counts() {
+    let levels = pocket_rings(&circle(0.0, 0.0, 60.0), &[], 3.0, 3.0);
+    assert_eq!(levels.len(), 9);
+    for (i, l) in levels.iter().enumerate() {
+        assert_eq!(l.len(), 1);
+        assert!(
+            (radius_of(&l[0]) - (27.0 - 3.0 * i as f64)).abs() < T,
+            "level {i}"
+        );
+    }
+    let levels = pocket_rings(&rect(-20.0, -20.0, 40.0, 40.0), &[], 3.0, 3.0);
+    let half: Vec<f64> = levels.iter().map(|l| radius_of(&l[0])).collect();
+    assert_eq!(levels.len(), 6, "{half:?}");
+    for (h, want) in half.iter().zip([17.0, 14.0, 11.0, 8.0, 5.0, 2.0]) {
+        assert!((h - want).abs() < T, "{half:?}");
+    }
+}
+
+#[test]
+fn t06_pocket_with_island() {
+    let levels = pocket_rings(&circle(0.0, 0.0, 60.0), &[circle(0.0, 0.0, 20.0)], 3.0, 3.0);
+    assert_eq!(levels.len(), 3);
+    for (i, l) in levels.iter().enumerate() {
+        assert_eq!(l.len(), 2);
+        let ccw: Vec<_> = l
+            .iter()
+            .filter(|c| c.orientation() == Some(Orientation::Ccw))
+            .collect();
+        let cw: Vec<_> = l
+            .iter()
+            .filter(|c| c.orientation() == Some(Orientation::Cw))
+            .collect();
+        assert_eq!((ccw.len(), cw.len()), (1, 1));
+        assert!((radius_of(ccw[0]) - (27.0 - 3.0 * i as f64)).abs() < T);
+        assert!((radius_of(cw[0]) - (13.0 + 3.0 * i as f64)).abs() < T);
+    }
+
+    // via an op: island selected or not
+    let mut pr = Project::new();
+    let outer = add_c(&mut pr, circle(0.0, 0.0, 60.0));
+    let inner = add_c(&mut pr, circle(0.0, 0.0, 20.0));
+    let tiny = add_c(&mut pr, circle(100.0, 0.0, 5.0));
+    let kind = OpKind::Pocket { stepover_pct: 50.0 };
+    let both = add_op(&mut pr, kind.clone(), vec![outer, inner]);
+    let only = add_op(&mut pr, kind.clone(), vec![outer]);
+    let small = add_op(&mut pr, kind, vec![tiny]);
+    for id in [both, only] {
+        op_mut(&mut pr, id).depth_per_pass = 5.0;
+    }
+    assert_eq!(cut_runs(&run(&pr, both).unwrap()).len(), 6);
+    assert_eq!(cut_runs(&run(&pr, only).unwrap()).len(), 9);
+    assert_eq!(run(&pr, small), Err(ToolpathError::OffsetVanished(tiny)));
+}
+
+#[test]
+fn t07_pocket_cut_order() {
+    let mut pr = Project::new();
+    let c = add_c(&mut pr, circle(0.0, 0.0, 60.0));
+    let op = add_op(&mut pr, OpKind::Pocket { stepover_pct: 50.0 }, vec![c]);
+    op_mut(&mut pr, op).depth_per_pass = 5.0;
+    let radii: Vec<f64> = cut_runs(&run(&pr, op).unwrap())
+        .iter()
+        .map(|(_, c)| radius_of(c))
+        .collect();
+    assert_eq!(radii.len(), 9);
+    for (i, r) in radii.iter().enumerate() {
+        assert!((r - 3.0 * (i + 1) as f64).abs() < T, "{radii:?}");
+    }
+}
+
+#[test]
+fn t08_depth_levels() {
+    let close = |a: Vec<f64>, b: &[f64]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < T)
+    };
+    assert!(close(depth_levels(5.0, 2.0), &[-1.666667, -3.333333, -5.0]));
+    assert!(close(depth_levels(6.0, 2.0), &[-2.0, -4.0, -6.0]));
+    assert!(close(depth_levels(1.0, 2.0), &[-1.0]));
+
+    let mut pr = Project::new();
+    let id = add_c(&mut pr, line(p(0.0, 0.0), p(10.0, 0.0)));
+    let op = add_op(&mut pr, OpKind::Engrave, vec![id]);
+    for (f, name) in [
+        (
+            &(|o: &mut hc_project::Operation| o.depth = 0.0) as &dyn Fn(&mut hc_project::Operation),
+            "depth",
+        ),
+        (&|o| o.depth_per_pass = 0.0, "depth_per_pass"),
+        (&|o| o.depth = f64::NAN, "depth"),
+        (&|o| o.depth_per_pass = f64::NAN, "depth_per_pass"),
+    ] {
+        let mut q = pr.clone();
+        f(op_mut(&mut q, op));
+        assert_eq!(run(&q, op), Err(ToolpathError::InvalidParam(name)));
+    }
+}
+
+/// Moves equal within T.
+fn same(a: &Move, b: &Move) -> bool {
+    let pt = |a: &Point3, b: &Point3| {
+        (a.x - b.x).abs() < T && (a.y - b.y).abs() < T && (a.z - b.z).abs() < T
+    };
+    match (a, b) {
+        (Move::Rapid(x), Move::Rapid(y)) => pt(x, y),
+        (Move::Linear { to: x, feed: f }, Move::Linear { to: y, feed: g }) => {
+            pt(x, y) && (f - g).abs() < T
+        }
+        _ => a == b,
+    }
+}
+
+#[test]
+fn t09_exact_engrave_moves() {
+    let mut pr = Project::new();
+    let id = add_c(&mut pr, line(p(0.0, 0.0), p(10.0, 0.0)));
+    let op = add_op(&mut pr, OpKind::Engrave, vec![id]);
+    let tp = run(&pr, op).unwrap();
+    let r = |x, y, z| Move::Rapid(Point3 { x, y, z });
+    let l = |x, y, z, feed| Move::Linear {
+        to: Point3 { x, y, z },
+        feed,
+    };
+    let (z1, z2) = (-5.0 / 3.0, -10.0 / 3.0);
+    let want = [
+        r(0.0, 0.0, 5.0),
+        r(0.0, 0.0, 2.0),
+        l(0.0, 0.0, z1, 200.0),
+        l(10.0, 0.0, z1, 800.0),
+        l(10.0, 0.0, z2, 200.0),
+        l(0.0, 0.0, z2, 800.0),
+        l(0.0, 0.0, -5.0, 200.0),
+        l(10.0, 0.0, -5.0, 800.0),
+        r(10.0, 0.0, 5.0),
+    ];
+    assert_eq!(tp.moves.len(), want.len(), "{:#?}", tp.moves);
+    for (i, (a, b)) in tp.moves.iter().zip(&want).enumerate() {
+        assert!(same(a, b), "move {i}: {a:?} != {b:?}");
+    }
+    assert_eq!((tp.op_id, tp.tool_id, tp.rpm), (op, 1, 18000));
+}
+
+/// Spec test 10 invariants. Rapids: always end at Z >= clearance; XY rapids also start there
+/// (a Z-only retract starts at cutting depth by construction, e.g. test 9's last move).
+fn check_invariants(pr: &Project, tp: &Toolpath) {
+    let m = &pr.machine;
+    let op = pr.operations.iter().find(|o| o.id == tp.op_id).unwrap();
+    let Move::Rapid(first) = tp.moves[0] else {
+        panic!("first move must be a rapid")
+    };
+    assert!((first.z - m.safe_z).abs() < T, "first move at safe_z");
+    let mut pos = first;
+    for mv in &tp.moves[1..] {
+        match mv {
+            Move::Rapid(to) => {
+                let xy = !to.xy().approx_eq(pos.xy(), 1e-9);
+                let z = (to.z - pos.z).abs() > 1e-9;
+                assert!(!(xy && z), "rapid changes XY and Z: {pos:?} -> {to:?}");
+                assert!(to.z >= m.clearance_z - 1e-9, "rapid ends below clearance");
+                if xy {
+                    assert!(
+                        pos.z >= m.clearance_z - 1e-9,
+                        "XY rapid starts below clearance"
+                    );
+                }
+                pos = *to;
+            }
+            Move::Linear { to, feed } => {
+                if to.z < pos.z - 1e-9 {
+                    assert!(to.xy().approx_eq(pos.xy(), 1e-9), "plunge is vertical");
+                    assert!((feed - op.plunge_feed).abs() < T);
+                } else if !to.xy().approx_eq(pos.xy(), 1e-9) && to.z < 0.0 {
+                    assert!((feed - op.feed).abs() < T);
+                    assert!((to.z - pos.z).abs() < 1e-9);
+                }
+                pos = *to;
+            }
+            Move::Arc {
+                to,
+                center,
+                ccw,
+                feed,
+            } => {
+                assert!((feed - op.feed).abs() < T);
+                assert!((to.z - pos.z).abs() < 1e-9);
+                let sweep = arc_sweep(pos.xy(), to.xy(), *center, *ccw);
+                assert!(sweep.abs() <= PI + 1e-9, "sweep {sweep}");
+                assert!((pos.xy().distance(*center) - to.xy().distance(*center)).abs() < T);
+                pos = *to;
+            }
+            Move::Drill { at, z_bottom, .. } => {
+                assert!(at.approx_eq(pos.xy(), 1e-9));
+                assert!(*z_bottom >= -op.depth - 1e-9);
+            }
+        }
+        assert!(pos.z >= -op.depth - 1e-9, "below final depth");
+    }
+    assert!((pos.z - m.safe_z).abs() < T, "ends at safe_z");
+}
+
+#[test]
+fn t10_invariants_mixed_project() {
+    let mut pr = Project::new();
+    let sq = add_c(&mut pr, rect(0.0, 0.0, 40.0, 30.0));
+    let hole = add_c(&mut pr, circle(20.0, 15.0, 12.0));
+    let open = add_c(&mut pr, line(p(50.0, 0.0), p(80.0, 10.0)));
+    let big = add_c(&mut pr, circle(150.0, 50.0, 60.0));
+    let island = add_c(&mut pr, circle(150.0, 50.0, 20.0));
+    let pt = add(&mut pr, Geom::Point(p(100.0, 100.0)));
+    let drill_c = add_c(&mut pr, circle(110.0, 100.0, 5.0));
+    let kinds = [
+        (OpKind::Engrave, vec![sq, open]),
+        (contour_kind(Side::Inside, Direction::Climb), vec![hole]),
+        (
+            contour_kind(Side::Outside, Direction::Conventional),
+            vec![sq, hole],
+        ),
+        (
+            contour_kind(Side::On, Direction::Conventional),
+            vec![sq, open],
+        ),
+        (OpKind::Pocket { stepover_pct: 40.0 }, vec![big, island]),
+        (OpKind::Drill { peck: Some(1.5) }, vec![pt, drill_c]),
+    ];
+    for (k, items) in kinds {
+        add_op(&mut pr, k, items);
+    }
+    let all = generate(&pr);
+    assert_eq!(all.len(), 6);
+    for (id, r) in &all {
+        let tp = r.as_ref().unwrap_or_else(|e| panic!("op {id}: {e}"));
+        check_invariants(&pr, tp);
+    }
+}
+
+#[test]
+fn t11_drill() {
+    let mut pr = Project::new();
+    let a = add_c(&mut pr, circle(30.0, 0.0, 5.0));
+    let b = add_c(&mut pr, circle(10.0, 0.0, 5.0));
+    let c = add(&mut pr, Geom::Point(p(0.0, 0.0)));
+    let op = add_op(&mut pr, OpKind::Drill { peck: Some(2.0) }, vec![a, b, c]);
+    let o = op_mut(&mut pr, op);
+    o.depth = 10.0;
+    o.plunge_feed = 100.0;
+    let tp = run(&pr, op).unwrap();
+    let mut want = Vec::new();
+    for x in [0.0, 10.0, 30.0] {
+        want.push(Move::Rapid(Point3 { x, y: 0.0, z: 5.0 }));
+        want.push(Move::Drill {
+            at: p(x, 0.0),
+            z_bottom: -10.0,
+            peck: Some(2.0),
+            r_plane: 2.0,
+            feed: 100.0,
+        });
+    }
+    assert_eq!(tp.moves, want);
+    let sq = add_c(&mut pr, rect(0.0, 0.0, 5.0, 5.0));
+    let bad = add_op(&mut pr, OpKind::Drill { peck: None }, vec![sq]);
+    assert_eq!(run(&pr, bad), Err(ToolpathError::UnsupportedItem(sq)));
+}
+
+#[test]
+fn t12_inner_feature_first() {
+    let mut pr = Project::new();
+    let sq = add_c(&mut pr, rect(0.0, 0.0, 20.0, 20.0));
+    let c = add_c(&mut pr, circle(10.0, 10.0, 5.0));
+    let op = add_op(
+        &mut pr,
+        contour_kind(Side::Outside, Direction::Climb),
+        vec![sq, c],
+    );
+    op_mut(&mut pr, op).depth_per_pass = 5.0;
+    let runs = cut_runs(&run(&pr, op).unwrap());
+    assert_eq!(runs.len(), 2);
+    // the circle's path: Ø5 + 2·3 = Ø11, centred at (10,10)
+    let b = runs[0].1.bbox();
+    assert!((b.width() - 11.0).abs() < T && b.min.approx_eq(p(4.5, 4.5), T));
+    assert!((runs[1].1.bbox().width() - 26.0).abs() < T);
+}
+
+#[test]
+fn t13_errors() {
+    let mut pr = Project::new();
+    let ln = add_c(&mut pr, line(p(0.0, 0.0), p(10.0, 0.0)));
+    let pt = add(&mut pr, Geom::Point(p(1.0, 1.0)));
+    let missing_tool = add_op(&mut pr, OpKind::Engrave, vec![ln]);
+    op_mut(&mut pr, missing_tool).tool = 9;
+    let empty = add_op(&mut pr, OpKind::Engrave, vec![]);
+    let pocket_open = add_op(&mut pr, OpKind::Pocket { stepover_pct: 50.0 }, vec![ln]);
+    let engrave_pt = add_op(&mut pr, OpKind::Engrave, vec![pt]);
+    let missing_item = add_op(&mut pr, OpKind::Engrave, vec![ln, 777]);
+    let disabled = add_op(&mut pr, OpKind::Engrave, vec![ln]);
+    op_mut(&mut pr, disabled).enabled = false;
+    let all = generate(&pr);
+    let get = |id| all.iter().find(|(i, _)| *i == id).map(|(_, r)| r.clone());
+    assert_eq!(get(missing_tool), Some(Err(ToolpathError::MissingTool(9))));
+    assert_eq!(get(empty), Some(Err(ToolpathError::NoItems)));
+    assert_eq!(get(pocket_open), Some(Err(ToolpathError::OpenContour(ln))));
+    assert_eq!(
+        get(engrave_pt),
+        Some(Err(ToolpathError::UnsupportedItem(pt)))
+    );
+    assert_eq!(
+        get(missing_item),
+        Some(Err(ToolpathError::MissingItem(777)))
+    );
+    assert_eq!(get(disabled), None);
+    assert_eq!(all.len(), 5);
+    assert_eq!(
+        ToolpathError::OffsetVanished(17).to_string(),
+        "Tool too large for item 17"
+    );
+    assert_eq!(
+        ToolpathError::OpenContour(4).to_string(),
+        "Needs closed contours (item 4 is open)"
+    );
+}
+
+fn bracket() -> Project {
+    let imp = hc_dxf::import_dxf_file(std::path::Path::new(BRACKET), &Default::default()).unwrap();
+    let mut pr = Project::new();
+    pr.add_dxf(&imp, "bracket.dxf");
+    pr.tools.push(tool(1, 6.35));
+    pr
+}
+
+/// Ids of Outline circles with diameter `d`.
+fn circles(pr: &Project, d: f64) -> Vec<(u64, Circle)> {
+    pr.items
+        .iter()
+        .filter(|i| i.layer == "Outline")
+        .filter_map(|i| match &i.geom {
+            Geom::Contour(c) => c.as_circle().map(|ci| (i.id, ci)),
+            _ => None,
+        })
+        .filter(|(_, c)| (2.0 * c.radius - d).abs() < 1e-6)
+        .collect()
+}
+
+#[test]
+fn t14_bracket() {
+    let mut pr = bracket();
+    let (outer_id, outer) = pr
+        .items
+        .iter()
+        .filter(|i| i.layer == "Outline")
+        .filter_map(|i| match &i.geom {
+            Geom::Contour(c) if c.closed => Some((i.id, c.clone())),
+            _ => None,
+        })
+        .max_by(|a, b| a.1.signed_area().abs().total_cmp(&b.1.signed_area().abs()))
+        .unwrap();
+    let r = 6.35 / 2.0;
+
+    let op = add_op(
+        &mut pr,
+        contour_kind(Side::Outside, Direction::Climb),
+        vec![outer_id],
+    );
+    let o = op_mut(&mut pr, op);
+    o.depth = 3.0;
+    o.depth_per_pass = 3.0;
+    let tp = run(&pr, op).unwrap();
+    check_invariants(&pr, &tp);
+    let runs = cut_runs(&tp);
+    assert_eq!(runs.len(), 1);
+    let loop_ = &runs[0].1;
+    assert!(loop_.closed, "last cut end = first cut start");
+    assert_eq!(loop_.orientation(), Some(Orientation::Cw));
+    let (got, want) = (loop_.bbox(), outer.bbox());
+    assert!(
+        got.min.approx_eq(want.min - p(r, r), T),
+        "{got:?} vs {want:?}"
+    );
+    assert!(
+        got.max.approx_eq(want.max + p(r, r), T),
+        "{got:?} vs {want:?}"
+    );
+
+    let holes = circles(&pr, 15.875);
+    assert_eq!(holes.len(), 4);
+    let ids: Vec<u64> = holes.iter().map(|h| h.0).collect();
+    let inside = add_op(
+        &mut pr,
+        contour_kind(Side::Inside, Direction::Climb),
+        ids.clone(),
+    );
+    op_mut(&mut pr, inside).depth_per_pass = 5.0;
+    let tp = run(&pr, inside).unwrap();
+    check_invariants(&pr, &tp);
+    let runs = cut_runs(&tp);
+    assert_eq!(runs.len(), 4);
+    for (_, c) in &runs {
+        assert_eq!(c.segments.len(), 2);
+        assert_eq!(c.orientation(), Some(Orientation::Ccw));
+        for s in &c.segments {
+            let Segment::Arc { radius, .. } = *s else {
+                panic!("arc expected")
+            };
+            assert!((radius - (15.875 / 2.0 - r)).abs() < T);
+        }
+    }
+
+    let big = circles(&pr, 76.2);
+    let small = circles(&pr, 44.45);
+    assert_eq!((big.len(), small.len()), (1, 1));
+    let pocket = add_op(
+        &mut pr,
+        OpKind::Pocket { stepover_pct: 40.0 },
+        vec![big[0].0, small[0].0],
+    );
+    let tp = run(&pr, pocket).unwrap();
+    check_invariants(&pr, &tp);
+    let runs = cut_runs(&tp);
+    assert!(runs.len() >= 2);
+    let c0 = small[0].1.center;
+    for (_, c) in &runs {
+        for s in &c.segments {
+            assert!(
+                s.start().distance(c0) >= 22.225 + r - T,
+                "ring vertex inside the island"
+            );
+        }
+    }
+
+    let drill = add_op(&mut pr, OpKind::Drill { peck: None }, ids);
+    let tp = run(&pr, drill).unwrap();
+    check_invariants(&pr, &tp);
+    let ats: Vec<Point> = tp
+        .moves
+        .iter()
+        .filter_map(|m| match m {
+            Move::Drill { at, .. } => Some(*at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ats.len(), 4);
+    for (_, h) in &holes {
+        assert!(ats.iter().any(|a| a.approx_eq(h.center, T)));
+    }
+}

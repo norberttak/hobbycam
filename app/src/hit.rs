@@ -2,7 +2,6 @@
 
 use hc_geom::{BBox, Point, Segment};
 use hc_project::{Geom, Item};
-use std::f64::consts::TAU;
 
 const TIE: f64 = 1e-9;
 pub const MAX_ARC_PIECES: usize = 512;
@@ -37,49 +36,10 @@ pub fn segment_points(seg: &Segment, tol: f64) -> Vec<Point> {
     }
 }
 
-fn dist_to_line(p: Point, a: Point, b: Point) -> f64 {
-    let d = b - a;
-    let len2 = d.dot(d);
-    if len2 < TIE {
-        return p.distance(a);
-    }
-    let t = ((p - a).dot(d) / len2).clamp(0.0, 1.0);
-    p.distance(a + d * t)
-}
-
-pub fn dist_to_segment(p: Point, seg: &Segment) -> f64 {
-    match *seg {
-        Segment::Line { start, end } => dist_to_line(p, start, end),
-        Segment::Arc {
-            center,
-            radius,
-            start_angle,
-            sweep,
-        } => {
-            let v = p - center;
-            let ang = v.y.atan2(v.x);
-            let off = if sweep >= 0.0 {
-                (ang - start_angle).rem_euclid(TAU)
-            } else {
-                (start_angle - ang).rem_euclid(TAU)
-            };
-            if off <= sweep.abs() || sweep.abs() >= TAU - TIE {
-                (v.length() - radius).abs()
-            } else {
-                p.distance(seg.start()).min(p.distance(seg.end()))
-            }
-        }
-    }
-}
-
 pub fn dist_to_item(p: Point, item: &Item) -> f64 {
     match &item.geom {
         Geom::Point(q) => p.distance(*q),
-        Geom::Contour(c) => c
-            .segments
-            .iter()
-            .map(|s| dist_to_segment(p, s))
-            .fold(f64::INFINITY, f64::min),
+        Geom::Contour(c) => c.distance_to(p),
     }
 }
 
@@ -170,7 +130,7 @@ pub fn box_select(
 mod tests {
     use super::*;
     use crate::state::tests::bracket_project;
-    use std::f64::consts::{FRAC_PI_2, PI};
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
@@ -186,8 +146,8 @@ mod tests {
             start: pt(0.0, 0.0),
             end: pt(10.0, 0.0),
         };
-        assert!(close(dist_to_segment(pt(5.0, 3.0), &l), 3.0));
-        assert!(close(dist_to_segment(pt(-3.0, 4.0), &l), 5.0));
+        assert!(close(l.distance_to(pt(5.0, 3.0)), 3.0));
+        assert!(close(l.distance_to(pt(-3.0, 4.0)), 5.0));
         let ccw = Segment::Arc {
             center: pt(0.0, 0.0),
             radius: 5.0,
@@ -201,10 +161,10 @@ mod tests {
             sweep: -FRAC_PI_2,
         };
         for a in [ccw, cw] {
-            assert!(close(dist_to_segment(pt(10.0, 0.0), &a), 5.0));
-            assert!(close(dist_to_segment(pt(3.0, 3.0), &a), 5.0 - 18f64.sqrt()));
-            assert!(close(dist_to_segment(pt(3.0, 3.0), &a), 0.757359));
-            assert!(close(dist_to_segment(pt(0.0, -5.0), &a), 50f64.sqrt()));
+            assert!(close(a.distance_to(pt(10.0, 0.0)), 5.0));
+            assert!(close(a.distance_to(pt(3.0, 3.0)), 5.0 - 18f64.sqrt()));
+            assert!(close(a.distance_to(pt(3.0, 3.0)), 0.757359));
+            assert!(close(a.distance_to(pt(0.0, -5.0)), 50f64.sqrt()));
         }
     }
 
@@ -312,7 +272,7 @@ mod edge_tests {
     use super::*;
     use hc_geom::Contour;
     use hc_project::Source;
-    use std::f64::consts::{FRAC_PI_2, PI};
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
     fn pt(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -361,8 +321,8 @@ mod edge_tests {
             start: pt(2.0, 2.0),
             end: pt(2.0, 2.0),
         };
-        assert!((dist_to_segment(pt(5.0, 6.0), &l) - 5.0).abs() < 1e-12);
-        assert_eq!(dist_to_segment(pt(2.0, 2.0), &l), 0.0);
+        assert!((l.distance_to(pt(5.0, 6.0)) - 5.0).abs() < 1e-12);
+        assert_eq!(l.distance_to(pt(2.0, 2.0)), 0.0);
         let items = [item(1, vec![l], false)];
         assert_eq!(pick(&items, |_| true, pt(2.5, 2.0), 0.6), Some(1));
         assert_eq!(pick(&items, |_| true, pt(2.5, 2.0), 0.4), None);
@@ -379,7 +339,7 @@ mod edge_tests {
             for ang in [0.0, 1.0, 2.5, PI, 4.0, 6.0] {
                 for d in [0.0, 2.0, 7.0] {
                     let p = pt(1.0 + d * f64::cos(ang), 1.0 + d * f64::sin(ang));
-                    let got = dist_to_segment(p, &a);
+                    let got = a.distance_to(p);
                     assert!(
                         (got - (d - 5.0).abs()).abs() < 1e-9,
                         "{start} {sweep} {ang} {d}: {got}"
@@ -408,7 +368,7 @@ mod edge_tests {
                 let t = i as f64 * TAU / 36.0;
                 for r in [0.0, 0.5, 2.9, 3.0, 4.0, 10.0] {
                     let p = pt(r * t.cos(), r * t.sin());
-                    let (da, db) = (dist_to_segment(p, &a), dist_to_segment(p, &b));
+                    let (da, db) = (a.distance_to(p), b.distance_to(p));
                     assert!((da - db).abs() < 1e-9, "{p:?}: {da} vs {db}");
                 }
             }
@@ -419,9 +379,9 @@ mod edge_tests {
     fn arc_distance_outside_sweep_uses_nearest_endpoint() {
         // quarter arc 0..90°, query at 180°: nearest endpoint is (0,5)
         let a = arc(0.0, 0.0, 5.0, 0.0, FRAC_PI_2);
-        assert!((dist_to_segment(pt(-5.0, 0.0), &a) - 50f64.sqrt()).abs() < 1e-12);
+        assert!((a.distance_to(pt(-5.0, 0.0)) - 50f64.sqrt()).abs() < 1e-12);
         // at the centre every arc point is r away, but outside the sweep only endpoints count: still 5
-        assert!((dist_to_segment(pt(0.0, 0.0), &a) - 5.0).abs() < 1e-12);
+        assert!((a.distance_to(pt(0.0, 0.0)) - 5.0).abs() < 1e-12);
     }
 
     #[test]

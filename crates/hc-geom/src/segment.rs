@@ -70,6 +70,53 @@ impl Segment {
         }
     }
 
+    /// Shortest distance from `p` to the segment.
+    pub fn distance_to(&self, p: Point) -> f64 {
+        match *self {
+            Segment::Line { start, end } => {
+                let d = end - start;
+                let len2 = d.dot(d);
+                if len2 < EPS {
+                    return p.distance(start);
+                }
+                let t = ((p - start).dot(d) / len2).clamp(0.0, 1.0);
+                p.distance(start + d * t)
+            }
+            Segment::Arc {
+                center,
+                radius,
+                start_angle,
+                sweep,
+            } => {
+                let v = p - center;
+                let ang = v.y.atan2(v.x);
+                let off = if sweep >= 0.0 {
+                    (ang - start_angle).rem_euclid(TAU)
+                } else {
+                    (start_angle - ang).rem_euclid(TAU)
+                };
+                if off <= sweep.abs() || sweep.abs() >= TAU - EPS {
+                    (v.length() - radius).abs()
+                } else {
+                    p.distance(self.start()).min(p.distance(self.end()))
+                }
+            }
+        }
+    }
+
+    /// The point halfway along the segment.
+    pub fn midpoint(&self) -> Point {
+        match *self {
+            Segment::Line { start, end } => (start + end) * 0.5,
+            Segment::Arc {
+                center,
+                radius,
+                start_angle,
+                sweep,
+            } => circle_point(center, radius, start_angle + sweep / 2.0),
+        }
+    }
+
     pub fn length(&self) -> f64 {
         match *self {
             Segment::Line { start, end } => start.distance(end),
@@ -287,6 +334,28 @@ mod tests {
         let a = Segment::arc_from_bulge(p(-1.0, 0.0), p(1.0, 0.0), -1.0);
         assert!((a.bbox().max.y - 1.0).abs() < T);
         assert!(a.end().approx_eq(p(1.0, 0.0), T));
+    }
+
+    #[test]
+    fn distance_to_and_midpoint() {
+        let l = Segment::Line {
+            start: p(0.0, 0.0),
+            end: p(10.0, 0.0),
+        };
+        assert!((l.distance_to(p(5.0, 3.0)) - 3.0).abs() < T);
+        assert!((l.distance_to(p(-3.0, 4.0)) - 5.0).abs() < T);
+        assert!(l.midpoint().approx_eq(p(5.0, 0.0), T));
+        let a = Segment::Arc {
+            center: p(0.0, 0.0),
+            radius: 5.0,
+            start_angle: 0.0,
+            sweep: FRAC_PI_2,
+        };
+        assert!((a.distance_to(p(3.0, 3.0)) - (5.0 - 18f64.sqrt())).abs() < T);
+        assert!((a.distance_to(p(0.0, -5.0)) - 50f64.sqrt()).abs() < T);
+        assert!(a
+            .midpoint()
+            .approx_eq(p(5.0 * FRAC_PI_4.cos(), 5.0 * FRAC_PI_4.sin()), T));
     }
 
     #[test]

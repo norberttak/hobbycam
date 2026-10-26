@@ -1,5 +1,17 @@
-use crate::Contour;
+use crate::{Contour, Point};
 use serde::{Deserialize, Serialize};
+
+/// Sample points closer than this (mm) to the parent's edge say nothing about containment.
+const ON_EDGE_TOL: f64 = 1e-6;
+
+/// A point of `child` that is not on `parent`'s edge: the start, else the first such segment midpoint.
+/// Falls back to the start when every candidate is on the edge (e.g. identical contours).
+fn sample_off_edge(child: &Contour, parent: &Contour) -> Point {
+    std::iter::once(child.start())
+        .chain(child.segments.iter().map(|s| s.midpoint()))
+        .find(|&p| parent.distance_to(p) > ON_EDGE_TOL)
+        .unwrap_or_else(|| child.start())
+}
 
 /// Nesting info for the contour at index `contour` of the input slice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,7 +39,7 @@ pub fn containment_tree(contours: &[Contour]) -> Vec<ContainmentNode> {
                         && usable(&contours[j])
                         && areas[j] > areas[i]
                         && bboxes[j].contains_bbox(&bboxes[i])
-                        && contours[j].contains_point(contours[i].start())
+                        && contours[j].contains_point(sample_off_edge(&contours[i], &contours[j]))
                 })
                 .min_by(|&a, &b| areas[a].total_cmp(&areas[b]))
         })
@@ -98,6 +110,20 @@ mod tests {
         assert_eq!((t[1].parent, t[1].depth), (Some(2), 1));
         assert_eq!((t[2].parent, t[2].depth), (None, 0));
         assert_eq!((t[3].parent, t[3].depth), (None, 0));
+    }
+
+    #[test]
+    fn child_touching_parent_at_its_start() {
+        // island Ø20 at (20,0) touches the Ø60 boundary at (30,0), which is also its start point
+        let t = containment_tree(&[circle(0.0, 0.0, 30.0), circle(20.0, 0.0, 10.0)]);
+        assert_eq!((t[1].parent, t[1].depth), (Some(0), 1));
+        // a polygon child whose first vertex lies on the parent's edge
+        let tri = polygon(&[(10.0, 0.0), (5.0, 3.0), (5.0, -3.0)]);
+        let t = containment_tree(&[square(5.0, 0.0, 10.0), tri]);
+        assert_eq!(t[1].parent, Some(0));
+        // touching from outside stays a sibling
+        let t = containment_tree(&[circle(0.0, 0.0, 30.0), circle(40.0, 0.0, 10.0)]);
+        assert_eq!(t[1].parent, None);
     }
 
     #[test]

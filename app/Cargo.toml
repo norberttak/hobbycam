@@ -10,6 +10,7 @@ eframe = "0.37.0"
 hc-dxf = { version = "0.1.0", path = "../crates/hc-dxf" }
 hc-geom = { version = "0.1.0", path = "../crates/hc-geom" }
 hc-project = { version = "0.1.0", path = "../crates/hc-project" }
+hc-toolpath = { version = "0.1.0", path = "../crates/hc-toolpath" }
 rfd = "0.17"
 
 [dev-dependencies]

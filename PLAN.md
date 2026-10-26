@@ -98,7 +98,8 @@ Each milestone ends with: `cargo fmt --check`, `cargo clippy -D warnings`, `carg
 - Contour: offset by tool radius inside/outside (cavalier_contours), climb/conventional
 - Pocket: concentric offset rings with stepover, islands respected
 - Drill: circle centers / points -> G81/G83
-- Depth stepping (depth per pass), ramp or plunge entry, safe-Z rapids, operation ordering (by tool, then user order)
+- Depth stepping (equal steps, each <= depth per pass), straight plunge entry (ramp later), safe-Z rapids, operations in strict user order (M8 may warn about repeated tool changes)
+- App: automatic regeneration, toolpath display (show/hide), per-op errors; auto-fit stock to the drawing on first DXF import
 - **Tests:** offsets of known shapes, pocket ring counts, depth pass counts, entry/exit at safe Z.
 
 ### M6 – Holding tabs

@@ -1,6 +1,7 @@
 //! Drawing canvas: input (pan/zoom/select) and painting.
 
-use crate::hit::segment_points;
+use crate::hit::{segment_points, tessellate_arc};
+use crate::state::AppState;
 use crate::view::grid_step;
 use crate::{aci, App};
 use eframe::egui::{
@@ -9,6 +10,7 @@ use eframe::egui::{
 };
 use hc_geom::{BBox, Point};
 use hc_project::Geom;
+use hc_toolpath::Move;
 
 const PICK_PX: f64 = 6.0;
 const ARC_TOL_PX: f64 = 0.25;
@@ -171,6 +173,9 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
             && b.min.y <= vis.max.y + margin
     };
     for selected in [false, true] {
+        if selected && s.show_toolpaths {
+            toolpaths(s, painter, rect, tol, dark);
+        }
         for (it, b) in s.project.items.iter().zip(&s.item_bbox) {
             if selected != s.selection.contains(&it.id) || !s.is_visible(it) || !in_view(b) {
                 continue;
@@ -246,5 +251,93 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
                 painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, green), 5.0, 4.0));
             }
         }
+    }
+}
+
+/// Top view of the toolpaths: feed moves solid, XY rapids dashed, drills as tool circle + cross. Z is not shown.
+fn toolpaths(s: &AppState, painter: &Painter, rect: Rect, tol: f64, dark: bool) {
+    let v = &s.view;
+    let feed = if dark {
+        Color32::from_rgb(80, 170, 255)
+    } else {
+        Color32::from_rgb(0, 90, 210)
+    };
+    let feed_stroke = Stroke::new(1.5, feed);
+    let rapid_stroke = Stroke::new(1.0, Color32::GRAY);
+    let to_screen = |p: Point| v.world_to_screen(rect, p);
+    for tp in s.toolpaths.iter().filter_map(|(_, r)| r.as_ref().ok()) {
+        let tool_r = s
+            .project
+            .tools
+            .iter()
+            .find(|t| t.id == tp.tool_id)
+            .map_or(0.0, |t| t.diameter / 2.0);
+        let mut pos: Option<Point> = None;
+        let mut run: Vec<Pos2> = Vec::new();
+        let flush = |run: &mut Vec<Pos2>| {
+            if run.len() > 1 {
+                painter.add(Shape::line(std::mem::take(run), feed_stroke));
+            }
+            run.clear();
+        };
+        for m in &tp.moves {
+            match m {
+                Move::Rapid(to) => {
+                    flush(&mut run);
+                    let to = to.xy();
+                    if let Some(from) = pos.filter(|f| !f.approx_eq(to, 1e-9)) {
+                        painter.extend(Shape::dashed_line(
+                            &[to_screen(from), to_screen(to)],
+                            rapid_stroke,
+                            4.0,
+                            4.0,
+                        ));
+                    }
+                    pos = Some(to);
+                }
+                Move::Linear { to, .. } => {
+                    let to = to.xy();
+                    if let Some(from) = pos.filter(|f| !f.approx_eq(to, 1e-9)) {
+                        if run.is_empty() {
+                            run.push(to_screen(from));
+                        }
+                        run.push(to_screen(to));
+                    }
+                    pos = Some(to);
+                }
+                Move::Arc {
+                    to, center, ccw, ..
+                } => {
+                    let to = to.xy();
+                    if let Some(from) = pos {
+                        let d = from - *center;
+                        let a0 = d.y.atan2(d.x);
+                        let a1 = (to.y - center.y).atan2(to.x - center.x);
+                        let sweep = if *ccw {
+                            (a1 - a0).rem_euclid(std::f64::consts::TAU)
+                        } else {
+                            -(a0 - a1).rem_euclid(std::f64::consts::TAU)
+                        };
+                        let pts = tessellate_arc(*center, d.length(), a0, sweep, tol);
+                        let skip = usize::from(!run.is_empty());
+                        run.extend(pts.into_iter().skip(skip).map(to_screen));
+                    }
+                    pos = Some(to);
+                }
+                Move::Drill { at, .. } => {
+                    flush(&mut run);
+                    let c = to_screen(*at);
+                    let r = (tool_r * v.zoom as f64) as f32;
+                    painter.circle_stroke(c, r, feed_stroke);
+                    let k = r.max(4.0);
+                    painter
+                        .line_segment([c - Vec2::new(k, 0.0), c + Vec2::new(k, 0.0)], feed_stroke);
+                    painter
+                        .line_segment([c - Vec2::new(0.0, k), c + Vec2::new(0.0, k)], feed_stroke);
+                    pos = Some(*at);
+                }
+            }
+        }
+        flush(&mut run);
     }
 }

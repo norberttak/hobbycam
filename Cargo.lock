@@ -572,6 +572,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavalier_contours"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85e06038a969c5e4d93565f12b044814d3b1a48d50c4ef868d588e79956fea51"
+dependencies = [
+ "ahash",
+ "num-traits 0.2.19",
+ "smallvec",
+ "static_aabb2d_index",
+]
+
+[[package]]
 name = "cc"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -654,7 +666,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1623,6 +1635,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hc-toolpath"
+version = "0.1.0"
+dependencies = [
+ "cavalier_contours",
+ "hc-dxf",
+ "hc-geom",
+ "hc-project",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1643,6 +1665,7 @@ dependencies = [
  "hc-dxf",
  "hc-geom",
  "hc-project",
+ "hc-toolpath",
  "rfd",
 ]
 
@@ -3456,6 +3479,15 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "static_aabb2d_index"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a753368e4dd146a347d0ea692f0f8a37df18df7eee5659d36dd75eb287c6454"
+dependencies = [
+ "num-traits 0.2.19",
+]
 
 [[package]]
 name = "static_assertions"

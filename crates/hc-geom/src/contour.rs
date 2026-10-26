@@ -1,7 +1,7 @@
 use crate::segment::angles_inside_sweep;
-use crate::{BBox, Point, Segment, Transform, EPS};
+use crate::{BBox, Circle, Point, Segment, Transform, EPS};
 use serde::{Deserialize, Serialize};
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// Connected sequence of segments, each starting where the previous ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +41,20 @@ impl Contour {
         Contour { segments, closed }
     }
 
+    /// The circle when the contour is exactly one full-circle arc (|sweep| = 2π). A circle split into
+    /// several arcs (e.g. two halves) is deliberately not recognised.
+    pub fn as_circle(&self) -> Option<Circle> {
+        match self.segments[..] {
+            [Segment::Arc {
+                center,
+                radius,
+                sweep,
+                ..
+            }] if (sweep.abs() - TAU).abs() < EPS => Some(Circle { center, radius }),
+            _ => None,
+        }
+    }
+
     /// Panics on an empty contour.
     pub fn start(&self) -> Point {
         self.segments[0].start()
@@ -49,6 +63,14 @@ impl Contour {
     /// Panics on an empty contour.
     pub fn end(&self) -> Point {
         self.segments[self.segments.len() - 1].end()
+    }
+
+    /// Shortest distance from `p` to the contour's edge (infinite for an empty contour).
+    pub fn distance_to(&self, p: Point) -> f64 {
+        self.segments
+            .iter()
+            .map(|s| s.distance_to(p))
+            .fold(f64::INFINITY, f64::min)
     }
 
     pub fn length(&self) -> f64 {
@@ -389,6 +411,23 @@ pub(crate) mod tests {
         assert!((c.signed_area() - 1.0).abs() < T);
         let open = Contour::from_bulge_vertices(&[(p(2.0, 2.0), 1.0), (p(2.0, 2.0), 0.0)], false);
         assert!(open.segments.is_empty());
+    }
+
+    #[test]
+    fn test_m5_15_as_circle() {
+        let circle = Circle {
+            center: p(1.0, 2.0),
+            radius: 3.0,
+        };
+        assert_eq!(circle.to_contour().as_circle(), Some(circle));
+        let mut cw = circle.to_contour();
+        cw.reverse();
+        assert_eq!(cw.as_circle(), Some(circle));
+        let halves = Contour::from_bulge_vertices(&[(p(4.0, 2.0), 1.0), (p(-2.0, 2.0), 1.0)], true);
+        assert!((halves.signed_area() - 9.0 * PI).abs() < T);
+        assert_eq!(halves.as_circle(), None);
+        assert_eq!(unit_square().as_circle(), None);
+        assert_eq!(half_disc().as_circle(), None);
     }
 
     #[test]
