@@ -112,13 +112,8 @@ fn comes_within(c: &Contour, other: &Contour, r: f64) -> bool {
     })
 }
 
-/// Pocket rings per offset level, outermost level first. Boundaries CCW, island rings CW.
-pub fn pocket_rings(
-    boundary: &Contour,
-    islands: &[Contour],
-    radius: f64,
-    step: f64,
-) -> Vec<Vec<Contour>> {
+/// The pocket region as a cavalier shape: boundary CCW, islands CW (region on the left), islands near a wall shrunk first.
+fn pocket_shape(boundary: &Contour, islands: &[Contour], radius: f64) -> Shape<f64> {
     let mut b = boundary.clone();
     b.set_orientation(Orientation::Ccw);
     // cavalier mis-offsets coincident edges: islands within r of another wall get a tiny gap first
@@ -147,8 +142,18 @@ pub fn pocket_rings(
         i.set_orientation(Orientation::Cw);
         to_pline(&i)
     }));
+    Shape::from_plines(plines)
+}
+
+/// Pocket rings per offset level, outermost level first. Boundaries CCW, island rings CW.
+pub fn pocket_rings(
+    boundary: &Contour,
+    islands: &[Contour],
+    radius: f64,
+    step: f64,
+) -> Vec<Vec<Contour>> {
     let opts = ShapeOffsetOptions::new();
-    let mut shape = Shape::from_plines(plines).parallel_offset(radius, &opts);
+    let mut shape = pocket_shape(boundary, islands, radius).parallel_offset(radius, &opts);
     let mut levels = Vec::new();
     while levels.len() < MAX_LEVELS {
         let level: Vec<Contour> = shape
@@ -165,6 +170,50 @@ pub fn pocket_rings(
         shape = shape.parallel_offset(step, &opts);
     }
     levels
+}
+
+fn shape_area(s: &Shape<f64>) -> f64 {
+    s.ccw_plines
+        .iter()
+        .chain(&s.cw_plines)
+        .map(|p| p.polyline.area())
+        .sum()
+}
+
+/// Opening loss k·(tan(φ/2) − φ/2) of a convex turn φ, capped at 2r² (a sharp spike leaves real material).
+fn corner_loss(k: f64, phi: f64, r2: f64) -> f64 {
+    (k * ((phi / 2.0).tan() - phi / 2.0)).clamp(0.0, 2.0 * r2)
+}
+
+/// Pocket area (mm²) a disk of radius `r` cannot reach, minus what no round tool can reach in sharp corners and tight
+/// convex fillets. ≈ 0 for shapes the tool fits everywhere; a neck or spur narrower than 2r adds its area.
+pub fn uncut_excess(boundary: &Contour, islands: &[Contour], r: f64) -> f64 {
+    let opts = ShapeOffsetOptions::new();
+    let shape = pocket_shape(boundary, islands, r);
+    let opened = shape.parallel_offset(r, &opts).parallel_offset(-r, &opts);
+    let r2 = r * r;
+    let mut allow = 0.0;
+    for p in shape.ccw_plines.iter().chain(&shape.cw_plines) {
+        let c = from_pline(&p.polyline);
+        let n = c.segments.len();
+        for (i, s) in c.segments.iter().enumerate() {
+            // region on the left: a left turn is a convex corner of the region
+            let (a, b) = (
+                crate::check::tangent(s, true),
+                crate::check::tangent(&c.segments[(i + 1) % n], false),
+            );
+            let phi = a.cross(b).atan2(a.dot(b));
+            if phi > 1e-9 {
+                allow += corner_loss(r2, phi, r2);
+            }
+            if let Segment::Arc { radius, sweep, .. } = *s {
+                if sweep > 0.0 && radius < r {
+                    allow += corner_loss(r2 - radius * radius, sweep, r2);
+                }
+            }
+        }
+    }
+    shape_area(&shape) - shape_area(&opened) - allow
 }
 
 #[cfg(test)]

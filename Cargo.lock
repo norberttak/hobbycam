@@ -1653,6 +1653,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hc-text"
+version = "0.1.0"
+dependencies = [
+ "epaint_default_fonts",
+ "hc-geom",
+ "ttf-parser",
+]
+
+[[package]]
 name = "hc-toolpath"
 version = "0.1.0"
 dependencies = [
@@ -1685,6 +1694,7 @@ dependencies = [
  "hc-post",
  "hc-project",
  "hc-sim",
+ "hc-text",
  "hc-toolpath",
  "rfd",
 ]

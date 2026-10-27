@@ -13,6 +13,7 @@ hc-post = { version = "0.1.0", path = "../crates/hc-post" }
 hc-project = { version = "0.1.0", path = "../crates/hc-project" }
 hc-sim = { version = "0.1.0", path = "../crates/hc-sim" }
 hc-toolpath = { version = "0.1.0", path = "../crates/hc-toolpath" }
+hc-text = { version = "0.1.0", path = "../crates/hc-text" }
 rfd = "0.17"
 
 [dev-dependencies]

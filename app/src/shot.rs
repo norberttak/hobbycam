@@ -363,3 +363,34 @@ fn shot_snap_kinds() {
         }
     }
 }
+
+/// M10b test 31. Manual check: letters upright, not mirrored, baseline straight; Hershey on top, Ubuntu Light below.
+#[test]
+#[ignore]
+fn shot_text() {
+    for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
+        let mut s = AppState::new(None);
+        for (text, font, y) in [
+            ("HobbyCAM AB gq 0123", hc_text::Font::Hershey, 20.0),
+            ("HobbyCAM AB gq 0123", hc_text::Font::Outline, 0.0),
+        ] {
+            s.add_shape(state::Shape::Text {
+                at: hc_geom::Point::new(0.0, y),
+                text: text.into(),
+                font,
+                height: 10.0,
+            })
+            .unwrap();
+        }
+        s.clear_selection();
+        s.set_tool(state::CanvasTool::Text);
+        s.fit_pending = true;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        assert!(h.query_by_label("Draw text").is_some());
+        save(&mut h, &format!("text{suffix}"));
+    }
+}

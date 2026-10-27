@@ -158,6 +158,7 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 tool_item(app, ui, "Line", "L", CanvasTool::Line);
                 tool_item(app, ui, "Rectangle", "R", CanvasTool::Rect);
                 tool_item(app, ui, "Circle", "C", CanvasTool::Circle);
+                tool_item(app, ui, "Text", "T", CanvasTool::Text);
                 ui.separator();
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
@@ -329,6 +330,7 @@ fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntry>> {
             tool(icons::LINE, "Line", "L", CanvasTool::Line),
             tool(icons::RECT, "Rectangle", "R", CanvasTool::Rect),
             tool(icons::CIRCLE, "Circle", "C", CanvasTool::Circle),
+            tool(icons::TEXT, "Text", "T", CanvasTool::Text),
             tool(icons::ORIGIN, "Set origin", "O", CanvasTool::SetOrigin),
             entry(icons::FIT, "Zoom to fit", key("F"), SideAct::Fit),
         ],
@@ -1102,6 +1104,7 @@ fn draw_form(app: &mut App, ui: &mut Ui) {
     let title = match tool {
         CanvasTool::Line => "Draw line",
         CanvasTool::Rect => "Draw rectangle",
+        CanvasTool::Text => "Draw text",
         _ => "Draw circle",
     };
     let mut add = false;
@@ -1126,6 +1129,30 @@ fn draw_form(app: &mut App, ui: &mut Ui) {
                     row(ui, "Width", &mut f.w);
                     row(ui, "Height", &mut f.h);
                     row(ui, "Corner radius", &mut f.r);
+                }
+                CanvasTool::Text => {
+                    let l = ui.label("Text");
+                    // the typed text is geometry, not UI: any character is allowed, missing ones are reported on Add
+                    ui.text_edit_singleline(&mut f.text).labelled_by(l.id);
+                    ui.end_row();
+                    let l = ui.label("Font");
+                    let name = |font| match font {
+                        hc_text::Font::Hershey => "Single-line (Hershey)",
+                        hc_text::Font::Outline => "Outline (Ubuntu Light)",
+                    };
+                    egui::ComboBox::from_id_salt("text_font")
+                        .selected_text(name(f.font))
+                        .show_ui(ui, |ui| {
+                            for font in [hc_text::Font::Hershey, hc_text::Font::Outline] {
+                                ui.selectable_value(&mut f.font, font, name(font));
+                            }
+                        })
+                        .response
+                        .labelled_by(l.id);
+                    ui.end_row();
+                    row(ui, "X", &mut f.a.x);
+                    row(ui, "Y", &mut f.a.y);
+                    row(ui, "Height", &mut f.height);
                 }
                 _ => {
                     row(ui, "Center X", &mut f.a.x);

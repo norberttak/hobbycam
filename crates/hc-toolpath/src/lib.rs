@@ -5,7 +5,7 @@ mod offset;
 mod tabs;
 
 pub use check::{check, describe, Issue, RuleId, Severity};
-pub use offset::{offset_closed, pocket_rings};
+pub use offset::{offset_closed, pocket_rings, uncut_excess};
 pub use tabs::tab_positions;
 
 use hc_geom::{containment_tree, Contour, Orientation, Point, Segment};
@@ -81,6 +81,8 @@ pub enum ToolpathNote {
         requested: usize,
     },
     TabsOnOpenContour(u64),
+    /// Parts of this pocket boundary's region are narrower than the tool (M10b ruling 2).
+    PocketUncut(u64),
 }
 
 impl fmt::Display for ToolpathNote {
@@ -92,6 +94,9 @@ impl fmt::Display for ToolpathNote {
                 requested,
             } => write!(f, "Item {item}: only {placed} of {requested} tabs fit"),
             ToolpathNote::TabsOnOpenContour(item) => write!(f, "Item {item} is open: no tabs"),
+            ToolpathNote::PocketUncut(item) => {
+                write!(f, "Item {item}: parts narrower than the tool")
+            }
         }
     }
 }
@@ -351,6 +356,12 @@ fn cut_features(
                     return Err(ToolpathError::OpenContour(id));
                 }
                 let climb = direction == Direction::Climb;
+                // one part, read even-odd: a hole (odd depth) is cut from the other side of its own contour
+                let side = match side {
+                    Side::Outside if tree[k].depth % 2 == 1 => Side::Inside,
+                    Side::Inside if tree[k].depth % 2 == 1 => Side::Outside,
+                    s => s,
+                };
                 let paths = match side {
                     Side::On if !c.closed => {
                         let mut c = c.clone();
@@ -410,6 +421,9 @@ fn cut_features(
                 let levels = pocket_rings(b, &islands, r, step);
                 if levels.is_empty() {
                     return Err(ToolpathError::OffsetVanished(id));
+                }
+                if uncut_excess(b, &islands, r) > r * r {
+                    notes.push(ToolpathNote::PocketUncut(id));
                 }
                 // innermost level first, the wall ring last
                 groups.push((

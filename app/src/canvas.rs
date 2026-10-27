@@ -83,6 +83,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
                 (egui::Key::L, CanvasTool::Line),
                 (egui::Key::R, CanvasTool::Rect),
                 (egui::Key::C, CanvasTool::Circle),
+                (egui::Key::T, CanvasTool::Text),
                 (egui::Key::O, CanvasTool::SetOrigin),
             ] {
                 if plain && ui.input(|i| i.key_pressed(key)) {
@@ -389,7 +390,7 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
                 ARC_TOL_PX / v.zoom as f64,
             )
         }
-        CanvasTool::Select | CanvasTool::SetOrigin => return,
+        CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Text => return,
     };
     let pts: Vec<Pos2> = world
         .into_iter()

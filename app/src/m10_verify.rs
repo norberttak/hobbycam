@@ -252,7 +252,11 @@ fn drawing_degenerate_and_negative_sizes_rejected() {
         ),
     ];
     for (shape, want) in bad {
-        assert_eq!(s.add_shape(shape), Err(want.to_string()), "{shape:?}");
+        assert_eq!(
+            s.add_shape(shape.clone()),
+            Err(want.to_string()),
+            "{shape:?}"
+        );
     }
     assert!(s.project.items.is_empty() && !s.dirty);
     assert!(
@@ -280,12 +284,12 @@ fn rounded_rect_radius_limits_in_mm_and_inch() {
         r: 5.01,
     };
     assert_eq!(
-        s.add_shape(big),
+        s.add_shape(big.clone()),
         Err("Corner radius must be at most 5.000 mm".into())
     );
     s.set_units(Units::Inch);
     assert_eq!(
-        s.add_shape(big),
+        s.add_shape(big.clone()),
         Err("Corner radius must be at most 0.1969 in".into())
     );
 }

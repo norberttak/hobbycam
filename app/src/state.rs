@@ -122,6 +122,7 @@ pub enum CanvasTool {
     Line,
     Rect,
     Circle,
+    Text,
 }
 
 impl CanvasTool {
@@ -136,20 +137,39 @@ impl CanvasTool {
             (CanvasTool::Rect, true) => "Rectangle: click the opposite corner",
             (CanvasTool::Circle, false) => "Circle: click the center",
             (CanvasTool::Circle, true) => "Circle: click a point on the circle",
+            (CanvasTool::Text, _) => "Text: click the start of the baseline",
         })
     }
 }
 
 /// A shape to add; becomes a plain contour.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
-    Line { a: Point, b: Point },
-    Rect { min: Point, w: f64, h: f64, r: f64 },
-    Circle { c: Point, r: f64 },
+    Line {
+        a: Point,
+        b: Point,
+    },
+    Rect {
+        min: Point,
+        w: f64,
+        h: f64,
+        r: f64,
+    },
+    Circle {
+        c: Point,
+        r: f64,
+    },
+    /// `at` = baseline start, `height` = cap height.
+    Text {
+        at: Point,
+        text: String,
+        font: hc_text::Font,
+        height: f64,
+    },
 }
 
-/// Persistent draw form values (mm). `a` = line start, rectangle bottom left, circle centre; `b` = line end.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Persistent draw form values (mm). `a` = line start, rectangle bottom left, circle centre, text baseline start; `b` = line end.
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrawForm {
     pub a: Point,
     pub b: Point,
@@ -158,6 +178,10 @@ pub struct DrawForm {
     pub r: f64,
     /// Circle diameter.
     pub d: f64,
+    pub text: String,
+    pub font: hc_text::Font,
+    /// Text cap height.
+    pub height: f64,
 }
 
 impl Default for DrawForm {
@@ -169,6 +193,9 @@ impl Default for DrawForm {
             h: 20.0,
             r: 0.0,
             d: 10.0,
+            text: "HobbyCAM".to_string(),
+            font: hc_text::Font::Hershey,
+            height: 10.0,
         }
     }
 }
@@ -190,6 +217,12 @@ impl DrawForm {
             CanvasTool::Circle => Some(Shape::Circle {
                 c: self.a,
                 r: self.d / 2.0,
+            }),
+            CanvasTool::Text => Some(Shape::Text {
+                at: self.a,
+                text: self.text.clone(),
+                font: self.font,
+                height: self.height,
             }),
             CanvasTool::Select | CanvasTool::SetOrigin => None,
         }
@@ -769,6 +802,13 @@ impl AppState {
                     self.tool = CanvasTool::Select;
                 }
             }
+            CanvasTool::Text => {
+                self.draw.a = p;
+                let shape = self.draw.shape(self.tool).expect("drawing tool");
+                if let Err(e) = self.add_shape(shape) {
+                    self.msg(Severity::Warning, e);
+                }
+            }
             CanvasTool::Line | CanvasTool::Rect | CanvasTool::Circle => {
                 let Some(first) = self.pending.take() else {
                     self.pending = Some(p);
@@ -793,8 +833,28 @@ impl AppState {
     }
 
     /// Validates and adds the shape on layer Drawing; the new items become the selection.
+    /// Text: characters not in the font are skipped and reported as a Warning, the rest is added.
     pub fn add_shape(&mut self, s: Shape) -> Result<Vec<u64>, String> {
         let contour = match s {
+            Shape::Text {
+                at,
+                text,
+                font,
+                height,
+            } => {
+                if !(height.is_finite() && height > 0.0) {
+                    return Err("Text needs a height".into());
+                }
+                let g = hc_text::text(&text, font, height, at).map_err(|e| e.to_string())?;
+                if !g.missing.is_empty() {
+                    let chars: Vec<String> = g.missing.iter().map(|&c| visible_char(c)).collect();
+                    self.msg(
+                        Severity::Warning,
+                        format!("Not in the font: {}", chars.join(", ")),
+                    );
+                }
+                return Ok(self.add_geoms(g.contours.into_iter().map(Geom::Contour).collect()));
+            }
             Shape::Line { a, b } => shapes::line(a, b).ok_or("Line is too short")?,
             Shape::Rect { min, w, h, r } => {
                 if !(w >= EPS && h >= EPS && w.is_finite() && h.is_finite()) {
@@ -813,11 +873,19 @@ impl AppState {
             }
             Shape::Circle { c, r } => shapes::circle(c, r).ok_or("Circle needs a diameter")?,
         };
-        let ids = self.project.add_drawn(vec![Geom::Contour(contour)]);
+        Ok(self.add_geoms(vec![Geom::Contour(contour)]))
+    }
+
+    /// Adds drawn geometry; the new items become the selection. Nothing (not dirty) when empty.
+    fn add_geoms(&mut self, geoms: Vec<Geom>) -> Vec<u64> {
+        if geoms.is_empty() {
+            return Vec::new();
+        }
+        let ids = self.project.add_drawn(geoms);
         self.items_changed();
         self.selection = ids.iter().copied().collect();
         self.dirty = true;
-        Ok(ids)
+        ids
     }
 
     /// Union of the selected items' bboxes (empty when nothing is selected).
@@ -1334,6 +1402,22 @@ impl AppState {
     /// (count, length, segment count) etc. for the single-item properties view.
     pub fn item(&self, id: u64) -> Option<&Item> {
         self.project.items.iter().find(|i| i.id == id)
+    }
+}
+
+/// A missing character for the warning; one the UI font (Ubuntu Light) cannot show either, and control characters, as U+XXXX.
+fn visible_char(c: char) -> String {
+    let shown = hc_text::text(
+        &c.to_string(),
+        hc_text::Font::Outline,
+        1.0,
+        Point::new(0.0, 0.0),
+    )
+    .is_ok_and(|g| g.missing.is_empty());
+    if shown {
+        c.to_string()
+    } else {
+        format!("U+{:04X}", c as u32)
     }
 }
 
@@ -3124,5 +3208,119 @@ mod m10_tests {
         s.selection = ids.iter().copied().collect();
         assert!(s.undo()); // back to empty: the selected item no longer exists
         assert!(s.selection.is_empty());
+    }
+
+    /// M10b test 29.
+    #[test]
+    fn m10_29_text() {
+        let dir = scratch("m10_29");
+        let mut s = AppState::new(Some(dir.join("tools.json")));
+        // Light strokes of a 10 mm text are about 1 mm wide: a small end mill
+        assert!(s.library_add(Tool {
+            diameter: 0.5,
+            ..tool(1)
+        }));
+        s.set_tool(CanvasTool::Text);
+        assert_eq!(
+            s.tool.hint(false),
+            Some("Text: click the start of the baseline")
+        );
+        s.draw.text = "HO".into();
+        s.draw.font = hc_text::Font::Outline;
+        s.draw.height = 10.0;
+        s.canvas_click(p(0.0, 0.0), false);
+        assert_eq!(s.project.items.len(), 3);
+        assert!(s
+            .project
+            .items
+            .iter()
+            .all(|i| i.layer == "Drawing" && matches!(&i.geom, Geom::Contour(c) if c.closed)));
+        let ids: Vec<u64> = s.project.items.iter().map(|i| i.id).collect();
+        assert_eq!(s.selection, ids.iter().copied().collect());
+        assert!(s.dirty);
+        assert_eq!(s.tool, CanvasTool::Text);
+        assert_eq!(s.draw.a, p(0.0, 0.0));
+        assert_eq!(s.item_bbox.len(), 3);
+        s.new_operation(NewKind::Pocket, 1).unwrap();
+        s.refresh_toolpaths();
+        assert!(s.toolpaths[0].1.is_ok(), "{:?}", s.toolpaths[0].1);
+        // M10b ruling 2: the flattened curves must not raise a false PocketUncut
+        assert!(
+            !s.issues
+                .iter()
+                .any(|i| i.rule == hc_toolpath::RuleId::PocketUncut),
+            "{:?}",
+            s.issues
+        );
+
+        // Hershey: open strokes, Engrave fine, Pocket is an OpenContour error
+        let mut s = AppState::new(Some(dir.join("tools.json")));
+        s.set_tool(CanvasTool::Text);
+        s.draw.text = "HI".into();
+        s.canvas_click(p(5.0, 5.0), false);
+        assert_eq!(s.project.items.len(), 4);
+        assert!(s
+            .project
+            .items
+            .iter()
+            .all(|i| matches!(&i.geom, Geom::Contour(c) if !c.closed)));
+        let engrave = s.new_operation(NewKind::Engrave, 1).unwrap();
+        let pocket = s.new_operation(NewKind::Pocket, 1).unwrap();
+        s.refresh_toolpaths();
+        let result = |id| &s.toolpaths.iter().find(|t| t.0 == id).unwrap().1;
+        assert!(result(engrave).is_ok());
+        assert!(matches!(result(pocket), Err(ToolpathError::OpenContour(_))));
+        assert!(s
+            .issues
+            .iter()
+            .any(|i| i.rule == hc_toolpath::RuleId::OpenContour
+                && i.severity == hc_toolpath::Severity::Error
+                && i.op == Some(pocket)));
+
+        // a missing character is reported, the rest is still added
+        let mut s = AppState::new(None);
+        s.set_tool(CanvasTool::Text);
+        s.draw.text = "Hé".into();
+        s.canvas_click(p(0.0, 0.0), true);
+        assert_eq!(s.project.items.len(), 3);
+        assert_eq!(
+            s.messages.last().unwrap(),
+            &Message {
+                severity: Severity::Warning,
+                text: "Not in the font: é".into()
+            }
+        );
+        // the UI font cannot show it either: code point instead
+        s.draw.font = hc_text::Font::Outline;
+        s.draw.text = "中\tA".into();
+        s.canvas_click(p(0.0, 20.0), false);
+        assert_eq!(
+            s.messages.last().unwrap().text,
+            "Not in the font: U+4E2D, U+0009"
+        );
+    }
+
+    #[test]
+    fn m10_text_errors() {
+        let mut s = AppState::new(None);
+        let text = |h: f64, t: &str| Shape::Text {
+            at: p(0.0, 0.0),
+            text: t.into(),
+            font: hc_text::Font::Hershey,
+            height: h,
+        };
+        for h in [0.0, -1.0, f64::NAN] {
+            assert_eq!(s.add_shape(text(h, "H")), Err("Text needs a height".into()));
+        }
+        // nothing to draw: no item, not dirty
+        assert_eq!(s.add_shape(text(10.0, "  ")), Ok(vec![]));
+        assert!(s.project.items.is_empty());
+        assert!(!s.dirty);
+        // the form default is engraving text
+        let f = DrawForm::default();
+        assert_eq!(
+            (f.text.as_str(), f.font, f.height),
+            ("HobbyCAM", hc_text::Font::Hershey, 10.0)
+        );
     }
 }

@@ -58,6 +58,7 @@ pub enum RuleId {
     DrillSize,
     SharedEdge,
     OutsideStock,
+    PocketUncut,
 }
 
 impl RuleId {
@@ -516,6 +517,22 @@ fn op_issues(
             );
         }
     }
+
+    // 28
+    if let Some(tp) = tp {
+        for n in &tp.notes {
+            if let ToolpathNote::PocketUncut(item) = *n {
+                add(
+                    RuleId::PocketUncut,
+                    Some(item),
+                    format!(
+                        "Parts of {} are narrower than the tool and stay uncut",
+                        the(project, item)
+                    ),
+                );
+            }
+        }
+    }
 }
 
 /// Distance between two arc-length positions on a closed loop of length `l`.
@@ -525,7 +542,7 @@ fn loop_dist(a: f64, b: f64, l: f64) -> f64 {
 }
 
 /// Direction of travel at the start (or end) of a segment, not normalised.
-fn tangent(s: &Segment, at_end: bool) -> Point {
+pub(crate) fn tangent(s: &Segment, at_end: bool) -> Point {
     match *s {
         Segment::Line { start, end } => end - start,
         Segment::Arc {

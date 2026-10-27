@@ -8,6 +8,8 @@ mod icons;
 mod m10_verify;
 #[cfg(test)]
 mod m10a2_verify;
+#[cfg(test)]
+mod m10b_verify;
 mod panels;
 #[cfg(test)]
 mod shot;
@@ -588,6 +590,41 @@ mod kittest {
         assert_eq!(h.state().state.project.items.len(), 1);
     }
 
+    /// M10b test 30.
+    #[test]
+    fn m10_t30_text_menu_and_form() {
+        let mut h = fresh();
+        h.run();
+        open_menu(&mut h, "Draw");
+        menu(&h, "Text").click();
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Text);
+        assert!(h
+            .query_by_label("Text: click the start of the baseline · Esc cancels")
+            .is_some());
+        for name in ["Text", "Font", "X", "Y", "Height", "Add"] {
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
+        }
+        menu(&h, "Font").click();
+        h.run();
+        h.get_by_label("Outline (Ubuntu Light)").click();
+        h.run();
+        assert_eq!(h.state().state.draw.font, hc_text::Font::Outline);
+        h.get_by_label("Add").click();
+        h.run();
+        let s = &h.state().state;
+        assert!(!s.project.items.is_empty());
+        assert_eq!(s.selection.len(), s.project.items.len());
+
+        // T on the canvas
+        h.state_mut().state.set_tool(state::CanvasTool::Select);
+        h.hover_at(egui::pos2(640.0, 400.0));
+        h.run();
+        h.key_press(egui::Key::T);
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Text);
+    }
+
     /// M10 test 22.
     #[test]
     fn m10_t22_draw_menu_form_transform_stock() {
@@ -770,6 +807,7 @@ mod kittest {
             ("Line", state::CanvasTool::Line),
             ("Rectangle", state::CanvasTool::Rect),
             ("Circle", state::CanvasTool::Circle),
+            ("Text", state::CanvasTool::Text),
             ("Set origin", state::CanvasTool::SetOrigin),
         ];
         for (name, tool) in tools.iter().rev() {

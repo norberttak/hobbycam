@@ -18,6 +18,7 @@ pub const SELECT: &str = "\u{e1dc}"; // cursor
 pub const LINE: &str = "\u{e6d2}"; // line-segment
 pub const RECT: &str = "\u{e3f0}"; // rectangle
 pub const CIRCLE: &str = "\u{e18a}"; // circle
+pub const TEXT: &str = "\u{e48a}"; // text-t
 pub const ORIGIN: &str = "\u{e1d6}"; // crosshair
 pub const FIT: &str = "\u{e1d0}"; // corners-out
 pub const TOOLPATHS: &str = "\u{e39c}"; // path
@@ -28,9 +29,9 @@ pub const STOCK: &str = "\u{e1da}"; // cube
 pub const TOOLS: &str = "\u{e5d4}"; // wrench
 
 #[cfg(test)]
-pub const ALL: [&str; 23] = [
+pub const ALL: [&str; 24] = [
     NEW, OPEN, SAVE, IMPORT, EXPORT, UNDO, REDO, DELETE, ROTATE, FLIP_H, FLIP_V, SELECT, LINE,
-    RECT, CIRCLE, ORIGIN, FIT, TOOLPATHS, SIM, UNITS, MACHINE, STOCK, TOOLS,
+    RECT, CIRCLE, TEXT, ORIGIN, FIT, TOOLPATHS, SIM, UNITS, MACHINE, STOCK, TOOLS,
 ];
 
 /// Adds Phosphor as the lowest-priority fallback of the proportional family (Private Use Area, no clash with text).

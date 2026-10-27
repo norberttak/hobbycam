@@ -600,6 +600,45 @@ fn r27_outside_stock() {
     fx.none(RuleId::OutsideStock);
 }
 
+/// M10b ruling 2: rule 28.
+#[test]
+fn r28_pocket_uncut() {
+    let mut fx = ok();
+    // two 10×10 squares joined by a 2 mm neck, narrower than the Ø3.175 tool
+    let v = [
+        (50.0, 15.0),
+        (60.0, 15.0),
+        (60.0, 19.0),
+        (66.0, 19.0),
+        (66.0, 15.0),
+        (76.0, 15.0),
+        (76.0, 25.0),
+        (66.0, 25.0),
+        (66.0, 21.0),
+        (60.0, 21.0),
+        (60.0, 25.0),
+        (50.0, 25.0),
+    ];
+    let neck = Contour::from_bulge_vertices(&v.map(|(x, y)| (p(x, y), 0.0)), true);
+    let id = add(&mut fx.pr, Geom::Contour(neck));
+    let pk = fx.pocket;
+    fx.op(pk).items = vec![id];
+    let i = fx.one(RuleId::PocketUncut);
+    assert_eq!(
+        (i.op, i.item, i.severity),
+        (Some(pk), Some(id), Severity::Warning)
+    );
+    assert!(
+        i.message.starts_with("Parts of the ")
+            && i.message
+                .ends_with(" are narrower than the tool and stay uncut"),
+        "{}",
+        i.message
+    );
+    assert_eq!(RuleId::PocketUncut.severity(), Severity::Warning);
+    ok().none(RuleId::PocketUncut);
+}
+
 #[test]
 fn t29_order_and_determinism() {
     let mut fx = ok();

@@ -536,7 +536,8 @@ fn t11_drill() {
 fn t12_inner_feature_first() {
     let mut pr = Project::new();
     let sq = add_c(&mut pr, rect(0.0, 0.0, 20.0, 20.0));
-    let c = add_c(&mut pr, circle(10.0, 10.0, 5.0));
+    // M10b ruling 1: was Ø5 cut from outside; a hole of the part is now cut from inside (Ø5 < Ø6 would vanish)
+    let c = add_c(&mut pr, circle(10.0, 10.0, 10.0));
     let op = add_op(
         &mut pr,
         contour_kind(Side::Outside, Direction::Climb),
@@ -545,10 +546,42 @@ fn t12_inner_feature_first() {
     op_mut(&mut pr, op).depth_per_pass = 5.0;
     let runs = cut_runs(&run(&pr, op).unwrap());
     assert_eq!(runs.len(), 2);
-    // the circle's path: Ø5 + 2·3 = Ø11, centred at (10,10)
+    // the hole's path: Ø10 − 2·3 = Ø4, centred at (10,10)
     let b = runs[0].1.bbox();
-    assert!((b.width() - 11.0).abs() < T && b.min.approx_eq(p(4.5, 4.5), T));
+    assert!((b.width() - 4.0).abs() < T && b.min.approx_eq(p(8.0, 8.0), T));
     assert!((runs[1].1.bbox().width() - 26.0).abs() < T);
+}
+
+/// M10b ruling 1: one Contour op on a square with a hole is one part; the hole is cut from the other side.
+#[test]
+fn m10b_contour_side_flips_for_holes() {
+    use Orientation::{Ccw, Cw};
+    let cases = [
+        // (side, direction, square: grow, orientation, hole: diameter, orientation)
+        (Side::Outside, Direction::Climb, 3.0, Cw, 4.0, Ccw),
+        (Side::Inside, Direction::Climb, -3.0, Ccw, 16.0, Cw),
+        (Side::Outside, Direction::Conventional, 3.0, Ccw, 4.0, Cw),
+        (Side::Inside, Direction::Conventional, -3.0, Cw, 16.0, Ccw),
+    ];
+    for (side, dir, grow, sq_o, hole_d, hole_o) in cases {
+        let mut pr = Project::new();
+        let sq = add_c(&mut pr, rect(0.0, 0.0, 50.0, 50.0));
+        let hole = add_c(&mut pr, circle(25.0, 25.0, 10.0));
+        let op = add_op(&mut pr, contour_kind(side, dir), vec![sq, hole]);
+        op_mut(&mut pr, op).depth_per_pass = 5.0;
+        let runs = cut_runs(&run(&pr, op).unwrap());
+        assert_eq!(runs.len(), 2, "{side:?} {dir:?}");
+        // the hole (deeper in the tree) first
+        let (h, s) = (&runs[0].1, &runs[1].1);
+        let hb = h.bbox();
+        assert!((hb.width() - hole_d).abs() < T, "{side:?} {dir:?}");
+        assert!(((hb.min + hb.max) * 0.5).approx_eq(p(25.0, 25.0), T));
+        assert_eq!(h.orientation(), Some(hole_o), "{side:?} {dir:?} hole");
+        let sb = s.bbox();
+        assert!(sb.min.approx_eq(p(-grow, -grow), T), "{side:?} {dir:?}");
+        assert!(sb.max.approx_eq(p(50.0 + grow, 50.0 + grow), T));
+        assert_eq!(s.orientation(), Some(sq_o), "{side:?} {dir:?} square");
+    }
 }
 
 #[test]
@@ -1271,4 +1304,81 @@ fn m6_review_r2_z_tab_clamped_to_stock_top() {
         Move::Linear { to, .. } | Move::Arc { to, .. } => to.z <= 1e-9,
         _ => true,
     }));
+}
+
+fn poly(v: &[(f64, f64)]) -> Contour {
+    Contour::from_bulge_vertices(
+        &v.iter().map(|&(x, y)| (p(x, y), 0.0)).collect::<Vec<_>>(),
+        true,
+    )
+}
+
+/// Pocket notes of one pocket op on `boundary` (+ islands), Ø6.
+fn pocket_notes(boundary: Contour, islands: Vec<Contour>) -> Vec<ToolpathNote> {
+    let mut pr = Project::new();
+    let mut ids = vec![add_c(&mut pr, boundary)];
+    ids.extend(islands.into_iter().map(|c| add_c(&mut pr, c)));
+    let op = add_op(&mut pr, OpKind::Pocket { stepover_pct: 0.0 }, ids);
+    run(&pr, op).unwrap().notes
+}
+
+/// M10b ruling 2: pockets with parts narrower than the tool get a PocketUncut note.
+#[test]
+fn m10b_pocket_uncut() {
+    let r = 3.0;
+    let sq = rect(0.0, 0.0, 20.0, 20.0);
+    let rounded = hc_geom::shapes::rect(p(0.0, 0.0), 30.0, 20.0, 1.0).unwrap();
+    // two 20×20 squares joined by a 2 mm wide, 10 mm long neck
+    let neck = poly(&[
+        (0.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 9.0),
+        (30.0, 9.0),
+        (30.0, 0.0),
+        (50.0, 0.0),
+        (50.0, 20.0),
+        (30.0, 20.0),
+        (30.0, 11.0),
+        (20.0, 11.0),
+        (20.0, 20.0),
+        (0.0, 20.0),
+    ]);
+    let hole = circle(10.0, 10.0, 4.0);
+    for (name, b, isl, want) in [
+        ("square", sq.clone(), vec![], false),
+        ("rounded", rounded, vec![], false),
+        ("island", sq, vec![hole], false),
+        ("neck", neck, vec![], true),
+    ] {
+        let excess = uncut_excess(&b, &isl, r);
+        let notes = pocket_notes(b, isl);
+        let got = notes
+            .iter()
+            .any(|n| matches!(n, ToolpathNote::PocketUncut(1)));
+        assert_eq!(got, want, "{name}: excess {excess}");
+    }
+    assert_eq!(
+        ToolpathNote::PocketUncut(7).to_string(),
+        "Item 7: parts narrower than the tool"
+    );
+}
+
+/// M10b ruling 2, spur case: a 20×20 square with a 1×10 mm spur, Ø6 → note.
+#[test]
+/// Ruling: a 1×15 spur (excess ≈ 11 > r²) warns; a 1×10 spur (≈ 6) is below the r² margin by design.
+fn m10b_pocket_uncut_spur() {
+    let spur = poly(&[
+        (0.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 9.5),
+        (35.0, 9.5),
+        (35.0, 10.5),
+        (20.0, 10.5),
+        (20.0, 20.0),
+        (0.0, 20.0),
+    ]);
+    let notes = pocket_notes(spur, vec![]);
+    assert!(notes
+        .iter()
+        .any(|n| matches!(n, ToolpathNote::PocketUncut(1))));
 }
