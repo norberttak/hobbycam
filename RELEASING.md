@@ -56,7 +56,15 @@ You need a paid Apple Developer Program membership.
 3. **App Store Connect API key** (used by `notarytool`, avoids your Apple ID password and 2FA in CI):
    App Store Connect → Users and Access → **Integrations** → App Store Connect API → **Team Keys** → **+**,
    role **Developer**. Download `AuthKey_XXXXXXXXXX.p8` (only possible once), note the **Key ID** and the **Issuer ID**.
-4. Add six repository secrets (Settings → Secrets and variables → Actions → **New repository secret**):
+4. Create the protected **`release` environment** (Settings → Environments → **New environment** → `release`):
+   - **Required reviewers:** add yourself, so every macOS release job waits for your approval before it can read the
+     secrets.
+   - **Deployment branches and tags → Selected branches and tags:** add the branch `main` (for the dry run) and the tag
+     pattern `v*`. Jobs from any other branch, a fork or a pull request get no secrets.
+   - Also protect the tags: Settings → Rules → Rulesets → **New tag ruleset**, target `v*`, restrict creations, updates
+     and deletions, with yourself in the bypass list. Then nobody else can push a release tag.
+5. Add six **environment secrets** to `release` (Settings → Environments → `release` → **Add environment secret**), not
+   repository secrets:
 
    | name | value |
    |---|---|
@@ -67,16 +75,20 @@ You need a paid Apple Developer Program membership.
    | `APPSTORE_API_KEY_ID` | the 10-character key id |
    | `APPSTORE_API_ISSUER_ID` | the issuer UUID |
 
-   With the gh CLI instead: `base64 -i DeveloperID.p12 | gh secret set MACOS_CERTIFICATE_P12_BASE64` (and likewise).
-   Delete the local `.p12`/`.p8` copies you no longer need, or keep them in a password manager.
+   With the gh CLI instead: `base64 -i DeveloperID.p12 | gh secret set MACOS_CERTIFICATE_P12_BASE64 --env release`
+   (and likewise). GitHub encrypts secrets and never shows them again; the workflow only ever writes the certificate
+   into a temporary keychain with a random password, after the build, and deletes it at the end of the job.
+   Keep the `.p12`, its password and the `.p8` in a password manager (the `.p8` cannot be downloaded again), then delete
+   the loose files and the clipboard copy. If one ever leaks: revoke the certificate at developer.apple.com and the API
+   key in App Store Connect, create new ones and replace the secrets.
 
 Without any of the six secrets (e.g. in a fork) the release still builds: the app is ad-hoc signed and the file is named
 `…-unsigned.dmg`. With only **some** of them set the macOS job fails and lists the missing names.
 
 ## 4. Dry run (before every first release with new secrets)
 
-1. Actions → **Release** → **Run workflow** (branch `main`). It builds and uploads workflow artifacts; it never creates a
-   release.
+1. Actions → **Release** → **Run workflow** (branch `main`). Approve the `release` environment when the macOS job
+   asks (Review deployments). It builds and uploads workflow artifacts; it never creates a release.
 2. Download the `macos` and `windows` artifacts from the run page and check the dmg:
 
    ```sh

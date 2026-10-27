@@ -93,6 +93,8 @@ jobs:
   macos:
     needs: check
     runs-on: macos-latest
+    # signing secrets live in this environment (protected: v* tags / main only, required reviewer)
+    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,6 +105,11 @@ jobs:
           path: meta
       - run: rustup target add aarch64-apple-darwin
       - run: cargo test --workspace --release
+      # build (third-party build scripts run here) before any signing material is on the runner
+      - name: Build app
+        env:
+          THIRD_PARTY: meta/THIRD-PARTY-LICENSES.html
+        run: scripts/macos-build.sh
       - name: Signing setup
         id: sign
         env:
@@ -139,10 +146,6 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
           printf '%s' "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
           echo "signed=true" >> "$GITHUB_OUTPUT"
-      - name: Build app
-        env:
-          THIRD_PARTY: meta/THIRD-PARTY-LICENSES.html
-        run: scripts/macos-build.sh
       - name: Sign, pack, notarize
         env:
           MACOS_SIGNING_IDENTITY: ${{ steps.sign.outputs.signed == 'true' && secrets.MACOS_SIGNING_IDENTITY || '' }}
