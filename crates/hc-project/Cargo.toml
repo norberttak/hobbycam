@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 directories = "6"
-hc-dxf = { version = "0.1.0", path = "../hc-dxf" }
-hc-geom = { version = "0.1.0", path = "../hc-geom" }
+hc-dxf = { path = "../hc-dxf" }
+hc-geom = { path = "../hc-geom" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }

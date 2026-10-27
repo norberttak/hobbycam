@@ -1,0 +1,185 @@
+name: Release
+
+# Tag vX.Y.Z: build, then a DRAFT GitHub Release (published by hand).
+# Run workflow (dry run): builds and uploads workflow artifacts only, never a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        run: |
+          V=$(cargo pkgid -p hobbycam)
+          V=${V##*[#@]}
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$V" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $V"
+            exit 1
+          fi
+          if ! grep -q "^## \[$V\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$V]' section"
+            exit 1
+          fi
+          awk -v h="## [$V]" 'index($0, "## [") == 1 { if (on) exit; if (index($0, h) == 1) on = 1; next } on' \
+            CHANGELOG.md > notes.md
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && grep -q "^## \[$V\] - YYYY-MM-DD" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md section $V still has the date placeholder YYYY-MM-DD"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-about@0.9.3
+      - run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta
+          path: |
+            notes.md
+            THIRD-PARTY-LICENSES.html
+          if-no-files-found: error
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      V: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: meta
+          path: meta
+      - run: cargo test --workspace --release
+      - run: cargo build --release -p hobbycam
+      - name: Static CRT check
+        run: |
+          if (Select-String -Path target\release\hobbycam.exe -Pattern 'VCRUNTIME140' -SimpleMatch -Quiet) {
+            throw "hobbycam.exe imports VCRUNTIME140: +crt-static is not in effect"
+          }
+      - name: Package
+        run: |
+          $d = "HobbyCAM-$env:V-windows-x86_64"
+          New-Item -ItemType Directory -Force $d, dist | Out-Null
+          Copy-Item target\release\hobbycam.exe $d
+          Copy-Item LICENSE "$d\LICENSE.txt"
+          Copy-Item README.md, meta\THIRD-PARTY-LICENSES.html, app\assets\PHOSPHOR-LICENSE.txt, crates\hc-text\fonts\HERSHEY-NOTICE.txt $d
+          Compress-Archive -Path $d -DestinationPath "dist\$d.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: meta
+          path: meta
+      - run: rustup target add aarch64-apple-darwin
+      - run: cargo test --workspace --release
+      - name: Signing setup
+        id: sign
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          missing=()
+          for n in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+                   APPSTORE_API_KEY_P8_BASE64 APPSTORE_API_KEY_ID APPSTORE_API_ISSUER_ID; do
+            [[ -n "${!n:-}" ]] || missing+=("$n")
+          done
+          if [[ ${#missing[@]} -eq 6 ]]; then
+            echo "::warning::No signing secrets: the app is ad-hoc signed and the dmg is named -unsigned"
+            exit 0
+          fi
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Signing secrets incomplete, missing: ${missing[*]}"
+            exit 1
+          fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          PW=$(openssl rand -base64 32)
+          echo "::add-mask::$PW"
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$PW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" "$KC"
+          security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - name: Build app
+        env:
+          THIRD_PARTY: meta/THIRD-PARTY-LICENSES.html
+        run: scripts/macos-build.sh
+      - name: Sign, pack, notarize
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ steps.sign.outputs.signed == 'true' && secrets.MACOS_SIGNING_IDENTITY || '' }}
+          NOTARY_KEY_PATH: ${{ steps.sign.outputs.signed == 'true' && format('{0}/AuthKey.p8', runner.temp) || '' }}
+          NOTARY_KEY_ID: ${{ steps.sign.outputs.signed == 'true' && secrets.APPSTORE_API_KEY_ID || '' }}
+          NOTARY_ISSUER: ${{ steps.sign.outputs.signed == 'true' && secrets.APPSTORE_API_ISSUER_ID || '' }}
+        run: scripts/macos-dmg.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+      - name: Remove keychain and key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/cert.p12"
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [check, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          V: ${{ needs.check.outputs.version }}
+        run: |
+          sha256sum -- *.zip *.dmg > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "HobbyCAM $V" --notes-file notes.md -- *.zip *.dmg SHA256SUMS

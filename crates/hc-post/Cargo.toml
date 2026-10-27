@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
-hc-geom = { version = "0.1.0", path = "../hc-geom" }
-hc-project = { version = "0.1.0", path = "../hc-project" }
-hc-toolpath = { version = "0.1.0", path = "../hc-toolpath" }
+hc-geom = { path = "../hc-geom" }
+hc-project = { path = "../hc-project" }
+hc-toolpath = { path = "../hc-toolpath" }

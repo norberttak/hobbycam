@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to HobbyCAM are listed here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
+
+## [0.1.0] - YYYY-MM-DD
+
+First release.
+
+### Added
+- DXF import (AutoCAD, QCAD): lines, arcs, circles, polylines, splines, ellipses, points, blocks; layers and units kept.
+- Geometry core: chaining loose segments into contours, open/closed detection, orientation, islands.
+- Project files (`.hcam`, with a `.bak` of the previous save) and a tool library (flat end mill, ball, V-bit, drill)
+  stored in the user's settings folder; projects embed the tools they use.
+- Canvas with pan/zoom, grid, layers, click and box selection.
+- Operations: engrave, contour (inside/outside, climb/conventional), pocket with islands, drill (G81/G83);
+  depth stepping, safe-Z rapids, strict user order.
+- Holding tabs: automatic placement per contour, move/add/delete on the canvas.
+- LinuxCNC G-code export: one `.ngc` file per tool for manual tool changes, separate tool-change Z.
+- Sanity checks (28 rules): errors block the export, warnings ask before exporting.
+- Simulation: animated tool, travelled path, swept width, play/pause/speed/scrub, machining time estimate.
+- Drawing tools: line, rectangle (also rounded), circle, text (single-line Hershey and outline Ubuntu Light);
+  move, rotate, scale, mirror, delete; snapping to ends, corners, centres, midpoints and intersections; set work origin;
+  stock settings; undo/redo.
+- User manual (Help → User manual, online at <https://norberttak.github.io/hobbycam/>).
+- Release builds: Windows x64 `.zip` and Apple-silicon macOS `.dmg` (notarized), app icon, third-party licence report.

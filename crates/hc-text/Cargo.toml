@@ -4,9 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
-hc-geom = { version = "0.1.0", path = "../hc-geom" }
+hc-geom = { path = "../hc-geom" }
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 # same copy as eframe (Ubuntu Light is already embedded in the app)
 epaint_default_fonts = "=0.37.0"

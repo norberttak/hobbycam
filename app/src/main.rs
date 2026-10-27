@@ -5,6 +5,8 @@ mod canvas;
 #[cfg(test)]
 mod docs_check;
 mod hit;
+#[cfg(test)]
+mod icon_gen;
 mod icons;
 #[cfg(test)]
 mod m10_verify;
@@ -13,6 +15,8 @@ mod m10a2_verify;
 #[cfg(test)]
 mod m10b_verify;
 mod panels;
+#[cfg(test)]
+mod release_check;
 #[cfg(test)]
 mod shot;
 mod snap;
@@ -23,6 +27,7 @@ mod view;
 use eframe::egui;
 use state::{AppState, NewKind};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 fn main() -> eframe::Result {
     let mut state = AppState::new(hc_project::default_library_path());
@@ -32,7 +37,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(state.title())
-            .with_inner_size([1280.0, 800.0]),
+            .with_inner_size([1280.0, 800.0])
+            .with_icon(Arc::new(
+                eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../assets/icon/hobbycam-256.png"
+                ))
+                .expect("icon"),
+            )),
         ..Default::default()
     };
     eframe::run_native(
@@ -207,13 +218,23 @@ impl App {
             return;
         };
         let ext = post.extension();
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter("G-code", &[ext])
-            .set_file_name(format!("{}.{ext}", self.state.stem()));
-        if let Some(dir) = self.state.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(dir);
-        }
-        if let Some(base) = dialog.save_file() {
+        // sandbox: a folder grant covers every segment file, its .bak and the stale-file scan
+        #[cfg(feature = "appstore")]
+        let base = rfd::FileDialog::new()
+            .set_title("Choose the folder for the G-code files")
+            .pick_folder()
+            .map(|folder| folder.join(format!("{stem}.{ext}")));
+        #[cfg(not(feature = "appstore"))]
+        let base = {
+            let mut dialog = rfd::FileDialog::new()
+                .add_filter("G-code", &[ext])
+                .set_file_name(format!("{}.{ext}", self.state.stem()));
+            if let Some(dir) = self.state.path.as_ref().and_then(|p| p.parent()) {
+                dialog = dialog.set_directory(dir);
+            }
+            dialog.save_file()
+        };
+        if let Some(base) = base {
             // headers carry the chosen file name
             let name = base
                 .file_stem()

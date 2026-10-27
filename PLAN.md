@@ -159,10 +159,17 @@ Spec: `specs/M11.md`.
 - mdBook is a dev tool only (`cargo install mdbook`); building and publishing the book in CI is M12.
 
 ### M12 – Release
-- GitHub Actions on tag `v*`: build Windows (.zip) and macOS universal binary (.app in .dmg), sign + notarize with your Developer ID (secrets in GitHub)
-- Mac App Store: app sandbox entitlements (user-selected file read/write), bundle via `cargo-bundle`, signed with the App Store certificate, upload via `xcrun altool`/Transporter, App Store Connect listing
-- Walkthrough doc for both.
-- CI: `mdbook build docs` + deploy to GitHub Pages; complete the Download section of `docs/src/install.md`.
+Spec: `specs/M12.md`.
+- CI (push/PR): fmt, clippy, test on macOS + Windows; actionlint + shellcheck; `cargo-about` licence gate; `mdbook build docs` and
+  deploy to GitHub Pages on `main`. Actions pinned by SHA, toolchain pinned in `rust-toolchain.toml`.
+- Release on tag `v*` (+ manual dry run): Windows x86_64 `.zip` (static CRT, icon), macOS Apple-silicon (aarch64, no Intel) `.app` in `.dmg` built by plain
+  scripts (no cargo-bundle), signed with Developer ID, notarized with `notarytool` + App Store Connect API key, stapled; unsigned
+  `-unsigned.dmg` when secrets are absent. `SHA256SUMS`, third-party licence report, **draft** GitHub Release from `CHANGELOG.md`;
+  tag must equal the workspace version.
+- Original app icon (tiny-skia generator, committed PNG/ICO/ICNS).
+- Mac App Store: local script, cargo feature `appstore` (sandbox: export picks a folder; saves without `.bak`), Apple Distribution +
+  Installer certs, provisioning profile, `productbuild` `.pkg`, upload with Transporter; listing steps; GPL/App Store note.
+- `RELEASING.md` maintainer walkthrough (repo creation and push are done by you); Download section of `docs/src/install.md`; `PRIVACY.md`.
 
 ## Agent workflow
 

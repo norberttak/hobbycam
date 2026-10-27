@@ -18,16 +18,73 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Write via `<path>.tmp` + rename; an existing file is first copied to `<path>.bak`.
+///
+/// Sandbox fallback (Mac App Store build, or a read-only directory with a writable file), only on `PermissionDenied`
+/// from the `.bak` copy or the `.tmp` file:
+/// - `path` exists: it is rewritten in place; if that write fails the old bytes are put back and the original error is
+///   returned. A `.bak` may remain if only the `.tmp` was denied.
+/// - `path` does not exist: it is created directly (`create_new`); a partial file is removed if the write fails.
+///   In a fully read-only directory creating `path` is denied too, so the save still errors.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
+    let tmp = with_suffix(path, ".tmp");
+    match backup_and_create_tmp(path, &tmp) {
+        Ok(f) => finish_tmp(f, &tmp, path, bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && path.is_file() => {
+            write_in_place(path, bytes, write_synced)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !path.exists() => {
+            write_new(path, bytes)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        drop(f);
+        let _ = fs::remove_file(path);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+fn backup_and_create_tmp(path: &Path, tmp: &Path) -> std::io::Result<fs::File> {
     if path.exists() {
         fs::copy(path, with_suffix(path, ".bak"))?;
     }
-    let tmp = with_suffix(path, ".tmp");
-    let mut f = fs::File::create(&tmp)?;
+    fs::File::create(tmp)
+}
+
+fn finish_tmp(mut f: fs::File, tmp: &Path, path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
     f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
-    fs::rename(&tmp, path)?;
+    fs::rename(tmp, path)?;
+    Ok(())
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// In-place rewrite; `write` is injectable so the restore branch can be tested.
+fn write_in_place(
+    path: &Path,
+    bytes: &[u8],
+    write: impl Fn(&Path, &[u8]) -> std::io::Result<()>,
+) -> Result<(), ProjectError> {
+    let old = fs::read(path)?;
+    if let Err(e) = write(path, bytes) {
+        // best effort: the original error is what the user needs to see
+        let _ = write_synced(path, &old);
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -95,6 +152,81 @@ pub(crate) fn to_checked_json<T: Serialize + DeserializeOwned>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hc-io-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn atomic_write_keeps_bak_in_normal_dir() {
+        let d = tmp_dir("normal");
+        let p = d.join("a.hcam");
+        atomic_write(&p, b"one").unwrap();
+        atomic_write(&p, b"two").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"two");
+        assert_eq!(fs::read(d.join("a.hcam.bak")).unwrap(), b"one");
+        assert!(!d.join("a.hcam.tmp").exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_falls_back_in_place_in_read_only_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp_dir("ro");
+        let p = d.join("a.hcam");
+        fs::write(&p, b"old").unwrap();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o555)).unwrap();
+        let existing = atomic_write(&p, b"new");
+        let fresh = atomic_write(&d.join("b.hcam"), b"x");
+        let entries: Vec<_> = fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
+        existing.unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("a.hcam")],
+            "no .bak, no .tmp"
+        );
+        match fresh {
+            Err(ProjectError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied),
+            other => panic!("new file in a denied dir: {other:?}"),
+        }
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn write_in_place_restores_old_bytes_on_failure() {
+        let d = tmp_dir("restore");
+        let p = d.join("a.ngc");
+        fs::write(&p, b"old bytes").unwrap();
+        let err = write_in_place(&p, b"new", |p, _| {
+            fs::write(p, b"half")?; // truncated + partial, then the disk "fills up"
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(matches!(err, Err(ProjectError::Io(e)) if e.to_string() == "disk full"));
+        assert_eq!(fs::read(&p).unwrap(), b"old bytes");
+        write_in_place(&p, b"new", write_synced).unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn write_new_creates_but_never_overwrites() {
+        let d = tmp_dir("new");
+        let p = d.join("n.ngc");
+        write_new(&p, b"g0").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"g0");
+        assert!(matches!(write_new(&p, b"x"), Err(ProjectError::Io(_))));
+        assert_eq!(fs::read(&p).unwrap(), b"g0");
+        fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn migrate_v1_adds_manual_only_to_tabs_objects() {

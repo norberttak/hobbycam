@@ -4,7 +4,12 @@ A simple 2D CAM program for hobby 3-axis CNC milling machines.
 Import DXF drawings (AutoCAD, QCAD), pick contours, assign engrave / contour / pocket / drill
 operations and export LinuxCNC G-code.
 
-Status: early development – see [PLAN.md](PLAN.md).
+Status: first release (0.1.0) in preparation – see [PLAN.md](PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Download
+
+Windows (64-bit) and Apple-silicon macOS builds are on the [Releases page](https://github.com/norberttak/hobbycam/releases).
+See the [install chapter](docs/src/install.md) of the manual. Privacy: [PRIVACY.md](PRIVACY.md) (no data collected).
 
 ## Build
 
@@ -22,6 +27,11 @@ Online: <https://norberttak.github.io/hobbycam/> (published from the first relea
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE).
+
+## Contributing
+
+Contributions are accepted under GPL-3.0-or-later and you agree that they may also be distributed through app stores.
+Maintainers: see [RELEASING.md](RELEASING.md).
 
 ## Third-party fonts
 

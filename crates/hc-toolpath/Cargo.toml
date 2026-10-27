@@ -4,11 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 cavalier_contours = { version = "0.9", default-features = false }
-hc-geom = { version = "0.1.0", path = "../hc-geom" }
-hc-project = { version = "0.1.0", path = "../hc-project" }
+hc-geom = { path = "../hc-geom" }
+hc-project = { path = "../hc-project" }
 
 [dev-dependencies]
 hc-dxf = { path = "../hc-dxf" }

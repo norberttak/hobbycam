@@ -236,7 +236,7 @@ fn save_into_missing_directory() {
 
 #[cfg(unix)]
 #[test]
-fn save_into_read_only_directory_leaves_original() {
+fn save_into_read_only_directory_rewrites_in_place() {
     use std::os::unix::fs::PermissionsExt;
     let dir = scratch("save_ro");
     let path = dir.join("p.hcam");
@@ -253,11 +253,15 @@ fn save_into_read_only_directory_leaves_original() {
     if writable {
         return;
     }
-    assert!(matches!(r, Err(ProjectError::Io(_))), "{r:?}");
-    assert!(matches!(r_new, Err(ProjectError::Io(_))), "{r_new:?}");
-    assert_eq!(fs::read(&path).unwrap(), before);
-    assert!(!dir.join("new.hcam").exists());
+    // M12 sandbox fallback: an existing writable file is rewritten in place, without .bak/.tmp
+    assert!(r.is_ok(), "{r:?}");
+    assert_ne!(fs::read(&path).unwrap(), before);
+    assert!((Project::load(&path).unwrap().0.stock.width - 1.0).abs() < 1e-9);
+    assert!(!dir.join("p.hcam.bak").exists());
     assert!(!dir.join("p.hcam.tmp").exists());
+    // a new file in the denied directory still fails
+    assert!(matches!(r_new, Err(ProjectError::Io(_))), "{r_new:?}");
+    assert!(!dir.join("new.hcam").exists());
 }
 
 #[cfg(unix)]

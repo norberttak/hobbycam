@@ -4,17 +4,26 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 eframe = "0.37.0"
-hc-dxf = { version = "0.1.0", path = "../crates/hc-dxf" }
-hc-geom = { version = "0.1.0", path = "../crates/hc-geom" }
-hc-post = { version = "0.1.0", path = "../crates/hc-post" }
-hc-project = { version = "0.1.0", path = "../crates/hc-project" }
-hc-sim = { version = "0.1.0", path = "../crates/hc-sim" }
-hc-toolpath = { version = "0.1.0", path = "../crates/hc-toolpath" }
-hc-text = { version = "0.1.0", path = "../crates/hc-text" }
+hc-dxf = { path = "../crates/hc-dxf" }
+hc-geom = { path = "../crates/hc-geom" }
+hc-post = { path = "../crates/hc-post" }
+hc-project = { path = "../crates/hc-project" }
+hc-sim = { path = "../crates/hc-sim" }
+hc-toolpath = { path = "../crates/hc-toolpath" }
+hc-text = { path = "../crates/hc-text" }
 rfd = "0.17"
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", default-features = false, features = ["wgpu", "snapshot"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "png-format"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"
+
+[features]
+# Mac App Store build (sandbox): G-code export asks for a folder
+appstore = []

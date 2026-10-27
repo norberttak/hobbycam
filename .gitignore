@@ -6,3 +6,5 @@
 
 # mdBook output
 docs/book/
+/dist
+/drawings
