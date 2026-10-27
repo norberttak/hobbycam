@@ -6,6 +6,7 @@ mod chain;
 mod contour;
 mod point;
 mod segment;
+pub mod shapes;
 mod transform;
 mod tree;
 

@@ -7,3 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/norberttak/hobbycam"
+
+# cavalier_contours 0.9 trips a debug_assert on touching islands that its release path handles cleanly (M10a)
+[profile.dev.package.cavalier_contours]
+debug-assertions = false

@@ -1648,6 +1648,7 @@ name = "hc-sim"
 version = "0.1.0"
 dependencies = [
  "hc-geom",
+ "hc-project",
  "hc-toolpath",
 ]
 

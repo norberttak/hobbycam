@@ -944,7 +944,7 @@ fn v2_migrate_tool_change_z() {
     ] {
         let (pr, _) = Project::from_json(&with_safe(safe)).unwrap();
         assert_eq!(pr.machine.tool_change_z, want, "safe {safe}");
-        assert_eq!(pr.format_version, 3);
+        assert_eq!(pr.format_version, 4); // M10: was 3
     }
     // a v2 file that already has tool_change_z keeps it
     let (pr, _) = Project::from_json(&with_safe("5.0, \"tool_change_z\": 12.0")).unwrap();
@@ -958,7 +958,11 @@ fn v2_migrate_tool_change_z() {
 #[test]
 fn v3_without_tool_change_z_is_a_json_error() {
     // spec: migrate only for found < 3, so a v3 file without the field is malformed
-    let text = Project::new().to_json().unwrap();
+    // M10: the current version is 4; make it a v3 file
+    let text = Project::new()
+        .to_json()
+        .unwrap()
+        .replace("\"format_version\": 4,", "\"format_version\": 3,");
     assert!(text.contains("\"format_version\": 3,"));
     assert!(text.contains("\"tool_change_z\": 40.0,"));
     let r = Project::from_json(&text.replace("\"tool_change_z\": 40.0,", ""));
@@ -967,4 +971,34 @@ fn v3_without_tool_change_z_is_a_json_error() {
         "{:?}",
         r.map(|(p, _)| p.machine)
     );
+}
+
+// ---------------------------------------------------------------- M10 test 7: picked work origin
+
+#[test]
+fn m10_07_picked_point_origin() {
+    let base = mixed();
+    let plain = export(&base, "o").unwrap();
+    let mut pr = base.clone();
+    pr.stock.origin = WorkOrigin::Point(p(10.0, 5.0));
+    assert_eq!(work_origin(&pr), p(10.0, 5.0));
+    let shifted = export(&pr, "o").unwrap();
+    assert_eq!(shifted.len(), plain.len());
+    for (a, b) in plain.iter().zip(&shifted) {
+        assert!(b.text.contains("XY0 = drawing point X10 Y5)"), "{}", b.text);
+        let (ca, cb) = (code(&a.text), code(&b.text));
+        assert_eq!(ca.len(), cb.len());
+        for (la, lb) in ca.iter().zip(&cb) {
+            for (k, off) in [('X', 10.0), ('Y', 5.0)] {
+                match (word(la, k), word(lb, k)) {
+                    (Some(va), Some(vb)) => assert!((va - off - vb).abs() < 1e-3, "{la} / {lb}"),
+                    (None, None) => {}
+                    _ => panic!("{la} / {lb}"),
+                }
+            }
+        }
+    }
+    pr.units = Units::Inch;
+    let f = export(&pr, "o").unwrap();
+    assert!(f[0].text.contains("XY0 = drawing point X0.3937 Y0.1969)"));
 }

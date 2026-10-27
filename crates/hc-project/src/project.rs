@@ -1,18 +1,21 @@
 use crate::io::{atomic_write, from_versioned_json, migrate, to_checked_json, FORMAT_VERSION};
 use crate::{ProjectError, Tool, Units};
 use hc_dxf::DxfImport;
-use hc_geom::{Contour, Point};
+use hc_geom::{Contour, Point, Transform};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
 /// XY zero of the G-code; Z0 is always the stock top.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A new variant here is a format version bump (an old app would silently use the wrong zero).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkOrigin {
     DrawingOrigin,
     StockBottomLeft,
     StockCenter,
+    /// Drawing coordinates, mm.
+    Point(Point),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -244,6 +247,40 @@ impl Project {
             }
         }
         ids
+    }
+
+    /// Layer "Drawing" (color 7) is added if missing; one item per geom, Source::Drawn; returns the new ids in order.
+    pub fn add_drawn(&mut self, geoms: Vec<Geom>) -> Vec<u64> {
+        const LAYER: &str = "Drawing";
+        if !self.layers.iter().any(|l| l.name == LAYER) {
+            self.layers.push(LayerInfo {
+                name: LAYER.to_string(),
+                color: 7,
+            });
+        }
+        geoms
+            .into_iter()
+            .map(|geom| {
+                let id = self.take_id();
+                self.items.push(Item {
+                    id,
+                    layer: LAYER.to_string(),
+                    source: Source::Drawn,
+                    geom,
+                });
+                id
+            })
+            .collect()
+    }
+
+    /// Applies `t` to the listed items (Contour::transformed / Transform::apply). Unknown ids are ignored. Tabs untouched.
+    pub fn transform_items(&mut self, ids: &[u64], t: &Transform) {
+        for item in self.items.iter_mut().filter(|i| ids.contains(&i.id)) {
+            item.geom = match &item.geom {
+                Geom::Contour(c) => Geom::Contour(c.transformed(t)),
+                Geom::Point(p) => Geom::Point(t.apply(*p)),
+            };
+        }
     }
 
     /// New operation with cutting data from `tool`; `tool` is embedded, replacing an older copy with the same id.

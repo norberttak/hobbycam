@@ -567,7 +567,7 @@ fn r26_shared_edge() {
     assert_eq!((i.op, i.item), (Some(id), Some(inner)));
     assert_eq!(
         i.message,
-        "The closed contour on layer 0 shares an edge with the closed contour on layer 0: the pocket may cut into it"
+        "The closed contour on layer 0 touches the closed contour on layer 0: the pocket treats them as one wall"
     );
     let mut fx = ok();
     let inner = add(&mut fx.pr, Geom::Contour(rect(15.0, 15.0, 25.0, 25.0)));
@@ -621,4 +621,151 @@ fn t29_order_and_determinism() {
             (RuleId::ThroughCut, Some(pk)), // 12.5 mm is also 2.5 mm into the spoilboard
         ]
     );
+}
+
+// ---------------------------------------------------------------- M10 test 8: origin independence
+
+#[test]
+fn m10_08_checks_ignore_the_work_origin() {
+    use hc_project::WorkOrigin;
+    let origins = [
+        WorkOrigin::DrawingOrigin,
+        WorkOrigin::StockBottomLeft,
+        WorkOrigin::StockCenter,
+        WorkOrigin::Point(p(500.0, 500.0)),
+    ];
+    let mut fx = ok();
+    fx.pr.stock.origin = WorkOrigin::Point(p(500.0, 500.0));
+    assert_eq!(fx.issues(), []);
+    for o in origins {
+        let mut fx = ok();
+        fx.pr.stock.origin = o;
+        fx.pr.stock.min_x = 20.0;
+        fx.pr.stock.width = 80.0;
+        fx.one(RuleId::OutsideStock);
+    }
+}
+
+// ---------------------------------------------------------------- M10 test 15: shared-edge island (M5 ruling e)
+
+fn shared_edge_pocket() -> (Project, u64) {
+    use hc_geom::shapes;
+    let mut pr = Project::new();
+    let ids = pr.add_drawn(vec![
+        Geom::Contour(shapes::rect(p(0.0, 0.0), 40.0, 40.0, 0.0).unwrap()),
+        Geom::Contour(shapes::rect(p(0.0, 10.0), 15.0, 20.0, 0.0).unwrap()),
+    ]);
+    let id = pr.add_operation("Pocket", OpKind::Pocket { stepover_pct: 0.0 }, &t1(), ids);
+    (pr, id)
+}
+
+/// Cutting-feed tool centres (below Z 0), sampled every 0.05 mm along lines and arcs.
+fn feed_samples(tp: &hc_toolpath::Toolpath) -> Vec<Point> {
+    use hc_toolpath::Move;
+    let mut cur = p(0.0, 0.0);
+    let mut out = Vec::new();
+    for m in &tp.moves {
+        match *m {
+            Move::Rapid(to) => cur = to.xy(),
+            Move::Linear { to, .. } => {
+                let n = (cur.distance(to.xy()) / 0.05).ceil().max(1.0) as usize;
+                if to.z < -1e-6 {
+                    out.extend((0..=n).map(|k| cur + (to.xy() - cur) * (k as f64 / n as f64)));
+                }
+                cur = to.xy();
+            }
+            Move::Arc {
+                to, center, ccw, ..
+            } => {
+                let a0 = (cur.y - center.y).atan2(cur.x - center.x);
+                let mut a1 = (to.y - center.y).atan2(to.x - center.x);
+                if ccw && a1 <= a0 {
+                    a1 += std::f64::consts::TAU;
+                }
+                if !ccw && a1 >= a0 {
+                    a1 -= std::f64::consts::TAU;
+                }
+                let rad = center.distance(cur);
+                let n = ((a1 - a0).abs() * rad / 0.05).ceil().max(1.0) as usize;
+                if to.z < -1e-6 {
+                    out.extend((0..=n).map(|k| {
+                        let a = a0 + (a1 - a0) * k as f64 / n as f64;
+                        center + p(a.cos(), a.sin()) * rad
+                    }));
+                }
+                cur = to.xy();
+            }
+            Move::Drill { .. } => {}
+        }
+    }
+    out
+}
+
+/// Signed depth of `q` inside the axis-aligned rect (> 0 inside, < 0 = minus the distance to it).
+fn rect_depth(q: Point, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+    let (dx, dy) = ((q.x - x0).min(x1 - q.x), (q.y - y0).min(y1 - q.y));
+    if dx >= 0.0 && dy >= 0.0 {
+        return dx.min(dy);
+    }
+    let ox = (x0 - q.x).max(q.x - x1).max(0.0);
+    let oy = (y0 - q.y).max(q.y - y1).max(0.0);
+    -(ox * ox + oy * oy).sqrt()
+}
+
+#[test]
+fn m10_15_pocket_island_sharing_an_edge() {
+    use hc_toolpath::generate_op;
+    let (pr, id) = shared_edge_pocket();
+    let op = pr.operations.iter().find(|o| o.id == id).unwrap().clone();
+    let tp = generate_op(&pr, &op).expect("pocket with a shared-edge island");
+    let r = t1().diameter / 2.0;
+    let pts = feed_samples(&tp);
+    assert!(!pts.is_empty());
+    for q in pts {
+        // tool edge into the island or past the boundary wall
+        let island = rect_depth(q, 0.0, 10.0, 15.0, 30.0) + r;
+        let wall = -rect_depth(q, 0.0, 0.0, 40.0, 40.0) + r;
+        assert!(
+            island.max(wall) <= 1e-3,
+            "gouge {} at {q:?}",
+            island.max(wall)
+        );
+    }
+}
+
+/// Architect review fix 1: two islands sharing an edge with each other inside the boundary.
+#[test]
+fn m10_15_two_islands_sharing_an_edge() {
+    use hc_geom::shapes;
+    use hc_toolpath::generate_op;
+    let mut pr = Project::new();
+    let ids = pr.add_drawn(vec![
+        Geom::Contour(shapes::rect(p(0.0, 0.0), 40.0, 40.0, 0.0).unwrap()),
+        Geom::Contour(shapes::rect(p(10.0, 10.0), 10.0, 20.0, 0.0).unwrap()),
+        Geom::Contour(shapes::rect(p(20.0, 10.0), 10.0, 20.0, 0.0).unwrap()),
+    ]);
+    let id = pr.add_operation("Pocket", OpKind::Pocket { stepover_pct: 0.0 }, &t1(), ids);
+    let op = pr.operations.iter().find(|o| o.id == id).unwrap().clone();
+    let tp = generate_op(&pr, &op).expect("pocket with two touching islands");
+    let r = t1().diameter / 2.0;
+    let pts = feed_samples(&tp);
+    assert!(!pts.is_empty());
+    for q in pts {
+        let a = rect_depth(q, 10.0, 10.0, 20.0, 30.0) + r;
+        let b = rect_depth(q, 20.0, 10.0, 30.0, 30.0) + r;
+        let wall = -rect_depth(q, 0.0, 0.0, 40.0, 40.0) + r;
+        let g = a.max(b).max(wall);
+        assert!(g <= 1e-3, "gouge {g} at {q:?}");
+    }
+}
+
+#[test]
+fn m10_15_shared_edge_island_is_warned() {
+    let (pr, _) = shared_edge_pocket();
+    let issues = check(&pr, &generate(&pr));
+    let shared: Vec<_> = issues
+        .iter()
+        .filter(|i| i.rule == RuleId::SharedEdge)
+        .collect();
+    assert_eq!(shared.len(), 1, "{issues:#?}");
 }

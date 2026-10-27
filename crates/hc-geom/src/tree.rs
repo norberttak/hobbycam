@@ -137,4 +137,22 @@ mod tests {
         assert_eq!((t[1].parent, t[1].depth), (None, 0));
         assert_eq!((t[2].parent, t[2].depth), (Some(1), 1));
     }
+
+    #[test]
+    fn m10_15_island_sharing_whole_edges() {
+        let rect =
+            |x0: f64, y0: f64, x1: f64, y1: f64| polygon(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]);
+        // one whole edge on the parent's left edge
+        let t = containment_tree(&[rect(0.0, 0.0, 20.0, 20.0), rect(0.0, 5.0, 10.0, 15.0)]);
+        assert_eq!((t[1].parent, t[1].depth), (Some(0), 1));
+        assert_eq!((t[0].parent, t[0].depth), (None, 0));
+        // three edges on the parent
+        let t = containment_tree(&[rect(0.0, 0.0, 20.0, 20.0), rect(0.0, 0.0, 10.0, 20.0)]);
+        assert_eq!((t[1].parent, t[1].depth), (Some(0), 1));
+        // shapes::rect island sharing its left edge with a shapes::rect boundary
+        let outer = crate::shapes::rect(Point::new(0.0, 0.0), 40.0, 40.0, 0.0).unwrap();
+        let island = crate::shapes::rect(Point::new(0.0, 10.0), 15.0, 20.0, 0.0).unwrap();
+        let t = containment_tree(&[outer, island]);
+        assert_eq!((t[1].parent, t[1].depth), (Some(0), 1));
+    }
 }

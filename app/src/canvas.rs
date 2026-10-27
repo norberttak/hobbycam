@@ -1,7 +1,8 @@
 //! Drawing canvas: input (pan/zoom/select) and painting.
 
 use crate::hit::{segment_points, tessellate_arc};
-use crate::state::AppState;
+use crate::snap::SNAP_PX;
+use crate::state::{AppState, CanvasTool};
 use crate::view::grid_step;
 use crate::{aci, App};
 use eframe::egui::{
@@ -17,6 +18,7 @@ const ARC_TOL_PX: f64 = 0.25;
 const BOX_MIN_PX: f32 = 4.0;
 const WHEEL_ZOOM: f32 = 1.2;
 const SELECTED: Color32 = Color32::from_rgb(255, 140, 0);
+const SNAP: Color32 = Color32::from_rgb(0, 190, 255);
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
@@ -73,19 +75,46 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
                 s.fit_pending = true;
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                s.clear_selection();
-                s.selected_tab = None;
+                s.escape();
+            }
+            // plain letters only: Cmd+O etc. are menu shortcuts
+            let plain = ui.input(|i| !i.modifiers.any());
+            for (key, tool) in [
+                (egui::Key::L, CanvasTool::Line),
+                (egui::Key::R, CanvasTool::Rect),
+                (egui::Key::C, CanvasTool::Circle),
+                (egui::Key::O, CanvasTool::SetOrigin),
+            ] {
+                if plain && ui.input(|i| i.key_pressed(key)) {
+                    s.set_tool(tool);
+                }
             }
             let del = ui
                 .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
-            if let Some((item, idx)) = s.selected_tab.filter(|_| del) {
-                s.delete_tab(item, idx);
+            if del {
+                match s.selected_tab {
+                    Some((item, idx)) => s.delete_tab(item, idx),
+                    None => s.delete_selection(),
+                }
             }
         }
     }
 
     let zoom = s.view.zoom as f64;
     let pick = PICK_PX / zoom;
+    if s.tool != CanvasTool::Select {
+        // tool clicks only: no selection, box or tab editing
+        if resp.clicked_by(PointerButton::Primary) && !space {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let w = s.view.screen_to_world(rect, p);
+                let snap = s.snap_at(w, SNAP_PX / zoom);
+                s.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some());
+            }
+        }
+        app.box_start = None;
+        app.tab_drag = false;
+        return;
+    }
     if resp.double_clicked_by(PointerButton::Primary) && !space {
         if let Some(p) = resp.interact_pointer_pos() {
             let w = s.view.screen_to_world(rect, p);
@@ -291,6 +320,10 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
         painter.line_segment([c - Vec2::new(0.0, 6.0), c + Vec2::new(0.0, 6.0)], stroke);
     }
 
+    if s.tool != CanvasTool::Select {
+        tool_overlay(s, ui, painter, rect);
+    }
+
     // selection box
     if let (Some(a), Some(b)) = (app.box_start, ui.input(|i| i.pointer.latest_pos())) {
         if (b - a).length() > BOX_MIN_PX {
@@ -313,6 +346,61 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
             }
         }
     }
+}
+
+/// Snap marker with its kind label and the rubber band from the pending first point.
+fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
+    let v = &s.view;
+    let Some(cursor) = s.cursor else { return };
+    let snap = s.snap_at(cursor, SNAP_PX / v.zoom as f64);
+    let at = snap.map_or(cursor, |sn| sn.p);
+    let stroke = Stroke::new(1.0, SNAP);
+    if let Some(sn) = snap {
+        let c = v.world_to_screen(rect, sn.p);
+        painter.rect_stroke(
+            Rect::from_center_size(c, Vec2::splat(8.0)),
+            0.0,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
+        painter.text(
+            c + Vec2::new(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            sn.kind.label(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            SNAP,
+        );
+    }
+    let Some(first) = s.pending else { return };
+    let world: Vec<Point> = match s.tool {
+        CanvasTool::Line => vec![first, at],
+        CanvasTool::Rect => vec![
+            first,
+            Point::new(at.x, first.y),
+            at,
+            Point::new(first.x, at.y),
+            first,
+        ],
+        CanvasTool::Circle => {
+            let r = first.distance(at);
+            if r * (v.zoom as f64) < 1.0 {
+                return;
+            }
+            tessellate_arc(
+                first,
+                r,
+                0.0,
+                std::f64::consts::TAU,
+                ARC_TOL_PX / v.zoom as f64,
+            )
+        }
+        CanvasTool::Select | CanvasTool::SetOrigin => return,
+    };
+    let pts: Vec<Pos2> = world
+        .into_iter()
+        .map(|p| v.world_to_screen(rect, p))
+        .collect();
+    painter.extend(Shape::dashed_line(&pts, stroke, 5.0, 4.0));
 }
 
 /// Top view of the toolpaths: feed moves solid, XY rapids dashed, drills as tool circle + cross. Z is not shown.

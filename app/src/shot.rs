@@ -201,3 +201,85 @@ fn shot_sim() {
         save(&mut h, name);
     }
 }
+
+/// Screen position of world point `w`, found by hovering a known canvas point (the canvas rect is not stored).
+fn screen_of(h: &mut Harness<'_, App>, w: hc_geom::Point) -> egui::Pos2 {
+    let probe = egui::pos2(640.0, 400.0);
+    h.hover_at(probe);
+    h.run();
+    let s = &h.state().state;
+    let c = s.cursor.expect("canvas hovered");
+    let z = s.view.zoom;
+    probe + egui::vec2(((w.x - c.x) as f32) * z, -((w.y - c.y) as f32) * z)
+}
+
+/// M10 test 23 plus the stock menu and a drawing preview. Manual check: marker and `Corner` label readable,
+/// arrows at the current origin, rubber band dashed, no tofu, light and dark.
+#[test]
+#[ignore]
+fn shot_snap() {
+    for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
+        let mut s = AppState::new(None);
+        s.open_cli(&state::tests::bracket_path());
+        s.set_tool(state::CanvasTool::SetOrigin);
+        let edge = state::tests::outer(&s);
+        let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
+        let corner = s
+            .snap_cache
+            .iter()
+            .filter(|(i, _, k)| *i == idx && *k == crate::snap::SnapKind::Corner)
+            .map(|(_, p, _)| *p)
+            .min_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
+            .unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        let at = screen_of(&mut h, corner) + egui::vec2(3.0, 0.0);
+        h.hover_at(at);
+        h.run();
+        let snap = h
+            .state()
+            .state
+            .snap_at(
+                h.state().state.cursor.unwrap(),
+                10.0 / h.state().state.view.zoom as f64,
+            )
+            .unwrap();
+        assert_eq!(snap.kind, crate::snap::SnapKind::Corner);
+        assert!(h
+            .query_by_label("Set origin: click a corner, end or center · Esc cancels")
+            .is_some());
+        save(&mut h, &format!("snap{suffix}"));
+
+        // pick it: the arrows move to the corner
+        h.state_mut().state.canvas_click(snap.p, true);
+        h.run();
+        assert_eq!(
+            h.state().state.project.stock.origin,
+            hc_project::WorkOrigin::Point(corner)
+        );
+        save(&mut h, &format!("set_origin{suffix}"));
+
+        h.get_by_label("Settings").click();
+        h.run();
+        h.get_by_label("Stock").hover();
+        h.run();
+        assert!(h.query_by_label("Pick on drawing").is_some());
+        save(&mut h, &format!("stock_menu{suffix}"));
+        h.key_press(egui::Key::Escape);
+        h.run();
+
+        // rectangle preview from the corner to a free point
+        h.state_mut().state.set_tool(state::CanvasTool::Rect);
+        h.state_mut().state.canvas_click(corner, true);
+        let far = screen_of(&mut h, corner) + egui::vec2(120.0, -80.0);
+        h.hover_at(far);
+        h.run();
+        assert!(h
+            .query_by_label("Rectangle: click the opposite corner · Esc cancels")
+            .is_some());
+        save(&mut h, &format!("draw_preview{suffix}"));
+    }
+}

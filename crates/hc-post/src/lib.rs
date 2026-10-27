@@ -104,6 +104,7 @@ pub fn work_origin(project: &Project) -> Point {
         WorkOrigin::DrawingOrigin => Point::new(0.0, 0.0),
         WorkOrigin::StockBottomLeft => Point::new(s.min_x, s.min_y),
         WorkOrigin::StockCenter => Point::new(s.min_x + s.width / 2.0, s.min_y + s.height / 2.0),
+        WorkOrigin::Point(p) => p,
     }
 }
 

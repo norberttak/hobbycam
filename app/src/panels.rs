@@ -1,11 +1,12 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
-use crate::state::{kind_label, MoveDir, NewKind, Severity};
+use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity};
 use crate::{aci, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
+use hc_geom::Transform;
 use hc_project::{
     fmt_len, from_display, parse_length, to_display, Direction, Geom, OpKind, Side, TabPlacement,
-    Units,
+    Units, WorkOrigin,
 };
 
 #[derive(Clone, Copy)]
@@ -43,6 +44,10 @@ const SC_SAVE_AS: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::S);
 const SC_IMPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::I);
 const SC_EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::E);
+const SC_UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Z);
+const SC_REDO: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::Z);
+const SC_REDO_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, egui::Key::Y);
 
 pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     // Shift+S first: consume_shortcut ignores extra modifiers
@@ -62,6 +67,34 @@ pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     }
     if ctx.input_mut(|i| i.consume_shortcut(&SC_EXPORT)) {
         app.export_gcode();
+    }
+    // a focused text field keeps its own undo
+    if !ctx.egui_wants_keyboard_input() {
+        // Shift+Z first, as for Save as
+        if ctx.input_mut(|i| i.consume_shortcut(&SC_REDO) || i.consume_shortcut(&SC_REDO_Y)) {
+            app.state.redo();
+        } else if ctx.input_mut(|i| i.consume_shortcut(&SC_UNDO)) {
+            app.state.undo();
+        }
+    }
+}
+
+/// Menu entry that can be disabled, with its shortcut text.
+fn item_enabled(ui: &mut Ui, enabled: bool, text: &str, sc: &KeyboardShortcut) -> bool {
+    let b = egui::Button::new(text).shortcut_text(ui.ctx().format_shortcut(sc));
+    let r = ui.add_enabled(enabled, b);
+    // accessible name without the shortcut text
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
+    r.clicked()
+}
+
+/// Draw menu entry: checked when `tool` is active.
+fn tool_item(app: &mut App, ui: &mut Ui, text: &str, key: &str, tool: CanvasTool) {
+    let on = app.state.tool == tool;
+    let r = ui.add(egui::Button::new(text).selected(on).shortcut_text(key));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, text));
+    if r.clicked() {
+        app.state.set_tool(tool);
     }
 }
 
@@ -102,6 +135,14 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                     app.request(&ctx, Pending::Quit);
                 }
             });
+            ui.menu_button("Edit", |ui| {
+                if item_enabled(ui, app.state.can_undo(), "Undo", &SC_UNDO) {
+                    app.state.undo();
+                }
+                if item_enabled(ui, app.state.can_redo(), "Redo", &SC_REDO) {
+                    app.state.redo();
+                }
+            });
             ui.menu_button("View", |ui| {
                 if ui
                     .add(egui::Button::new("Zoom to fit").shortcut_text("F"))
@@ -111,6 +152,14 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 }
                 ui.checkbox(&mut app.state.show_toolpaths, "Show toolpaths");
                 ui.checkbox(&mut app.state.sim_view.open, "Simulation");
+            });
+            ui.menu_button("Draw", |ui| {
+                tool_item(app, ui, "Select", "Esc", CanvasTool::Select);
+                tool_item(app, ui, "Line", "L", CanvasTool::Line);
+                tool_item(app, ui, "Rectangle", "R", CanvasTool::Rect);
+                tool_item(app, ui, "Circle", "C", CanvasTool::Circle);
+                ui.separator();
+                tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
             ui.menu_button("Settings", |ui| {
                 ui.menu_button("Units", |ui| {
@@ -138,12 +187,62 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                     });
                     app.state.set_machine(m);
                 });
+                ui.menu_button("Stock", |ui| stock_menu(app, ui));
                 if ui.button("Tool library…").clicked() {
                     app.tool_dialog.open = true;
                 }
             });
         });
     });
+}
+
+fn stock_menu(app: &mut App, ui: &mut Ui) {
+    let u = app.state.project.units;
+    let mut st = app.state.project.stock.clone();
+    egui::Grid::new("stock").show(ui, |ui| {
+        for (name, v) in [
+            ("X", &mut st.min_x),
+            ("Y", &mut st.min_y),
+            ("Width", &mut st.width),
+            ("Height", &mut st.height),
+            ("Thickness", &mut st.thickness),
+        ] {
+            let l = ui.label(name);
+            length_field(ui, v, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+        }
+    });
+    ui.separator();
+    ui.label("Origin");
+    for (name, o) in [
+        ("Drawing origin", WorkOrigin::DrawingOrigin),
+        ("Stock bottom left", WorkOrigin::StockBottomLeft),
+        ("Stock center", WorkOrigin::StockCenter),
+    ] {
+        if ui.radio(st.origin == o, name).clicked() {
+            st.origin = o;
+        }
+    }
+    let picked = matches!(st.origin, WorkOrigin::Point(_));
+    if ui.radio(picked, "Picked point").clicked() && !picked {
+        // start at the current zero: no jump
+        st.origin = WorkOrigin::Point(hc_post::work_origin(&app.state.project));
+    }
+    if let WorkOrigin::Point(p) = &mut st.origin {
+        egui::Grid::new("stock_origin").show(ui, |ui| {
+            let l = ui.label("Origin X");
+            length_field(ui, &mut p.x, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Origin Y");
+            length_field(ui, &mut p.y, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+        });
+    }
+    app.state.set_stock(st);
+    if ui.button("Pick on drawing").clicked() {
+        app.state.set_tool(CanvasTool::SetOrigin);
+        ui.close();
+    }
 }
 
 pub fn messages(app: &mut App, ui: &mut Ui) {
@@ -193,10 +292,22 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
                 )),
                 None => ui.monospace("X – Y –"),
             };
+            let o = hc_post::work_origin(&s.project);
+            if let Some(p) = s.cursor.filter(|_| o.length() > 0.0) {
+                ui.monospace(format!(
+                    "· Work X {:.dec$} Y {:.dec$}",
+                    to_display(p.x - o.x, u),
+                    to_display(p.y - o.y, u)
+                ));
+            }
             ui.separator();
             ui.label(format!("Zoom {:.0}%", s.view.zoom * 100.0));
             ui.separator();
             ui.label(format!("{} selected", s.selection.len()));
+            if let Some(h) = s.tool.hint(s.pending.is_some()) {
+                ui.separator();
+                ui.label(format!("{h} · Esc cancels"));
+            }
         });
     });
 }
@@ -548,6 +659,9 @@ pub fn right(app: &mut App, ui: &mut Ui) {
                     .and_then(|id| app.state.project.operations.iter().find(|o| o.id == id))
                     .cloned();
                 match op {
+                    _ if !matches!(app.state.tool, CanvasTool::Select | CanvasTool::SetOrigin) => {
+                        draw_form(app, ui)
+                    }
                     Some(op) => op_props(app, ui, op),
                     None => selection_props(app, ui),
                 }
@@ -704,11 +818,121 @@ fn tabs_group(ui: &mut Ui, tabs: &mut hc_project::Tabs, u: Units) -> bool {
     reset
 }
 
+/// Numeric input of the active drawing tool; canvas clicks write into the same fields.
+fn draw_form(app: &mut App, ui: &mut Ui) {
+    let s = &mut app.state;
+    let u = s.project.units;
+    let tool = s.tool;
+    let f = &mut s.draw;
+    let title = match tool {
+        CanvasTool::Line => "Draw line",
+        CanvasTool::Rect => "Draw rectangle",
+        _ => "Draw circle",
+    };
+    let mut add = false;
+    ui.group(|ui| {
+        ui.strong(title);
+        egui::Grid::new("draw_form").num_columns(2).show(ui, |ui| {
+            let row = |ui: &mut Ui, name: &str, v: &mut f64| {
+                let l = ui.label(name);
+                length_field(ui, v, u, Quantity::Length).labelled_by(l.id);
+                ui.end_row();
+            };
+            match tool {
+                CanvasTool::Line => {
+                    row(ui, "X1", &mut f.a.x);
+                    row(ui, "Y1", &mut f.a.y);
+                    row(ui, "X2", &mut f.b.x);
+                    row(ui, "Y2", &mut f.b.y);
+                }
+                CanvasTool::Rect => {
+                    row(ui, "X", &mut f.a.x);
+                    row(ui, "Y", &mut f.a.y);
+                    row(ui, "Width", &mut f.w);
+                    row(ui, "Height", &mut f.h);
+                    row(ui, "Corner radius", &mut f.r);
+                }
+                _ => {
+                    row(ui, "Center X", &mut f.a.x);
+                    row(ui, "Center Y", &mut f.a.y);
+                    row(ui, "Diameter", &mut f.d);
+                }
+            }
+        });
+        add = ui.button("Add").clicked();
+    });
+    if let Some(shape) = add.then(|| s.draw.shape(tool)).flatten() {
+        if let Err(e) = s.add_shape(shape) {
+            s.msg(Severity::Warning, e);
+        }
+    }
+}
+
+/// Move / rotate / scale / flip / delete of the selection, about its bbox centre.
+fn transform_group(app: &mut App, ui: &mut Ui) {
+    let s = &mut app.state;
+    let u = s.project.units;
+    let c = s.selection_center();
+    let x = &mut s.xform;
+    let mut t = None;
+    let mut delete = false;
+    ui.group(|ui| {
+        ui.strong("Transform");
+        egui::Grid::new("xform").num_columns(2).show(ui, |ui| {
+            let l = ui.label("Move X");
+            length_field(ui, &mut x.dx, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Move Y");
+            length_field(ui, &mut x.dy, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+        });
+        if ui.button("Move").clicked() {
+            t = Some(Transform::translate(x.dx, x.dy));
+        }
+        ui.horizontal(|ui| {
+            let l = ui.label("Angle");
+            ui.add(egui::DragValue::new(&mut x.angle_deg).suffix("°"))
+                .labelled_by(l.id);
+            if ui.button("Rotate").clicked() {
+                t = Some(Transform::rotate(x.angle_deg.to_radians(), c));
+            }
+        });
+        ui.horizontal(|ui| {
+            let l = ui.label("Factor");
+            ui.add(egui::DragValue::new(&mut x.factor).speed(0.01))
+                .labelled_by(l.id);
+            let ok = x.factor.is_finite() && x.factor > 0.0;
+            if ui.add_enabled(ok, egui::Button::new("Scale")).clicked() {
+                t = Some(Transform::scale(x.factor, c));
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Flip horizontally").clicked() {
+                t = Some(Transform::mirror_y(c.x));
+            }
+            if ui.button("Flip vertically").clicked() {
+                t = Some(Transform::mirror_x(c.y));
+            }
+        });
+        delete = ui.button("Delete").clicked();
+        ui.weak("About the center of the selection");
+    });
+    if let Some(t) = t {
+        s.transform_selection(&t);
+    }
+    if delete {
+        s.delete_selection();
+    }
+}
+
 fn selection_props(app: &mut App, ui: &mut Ui) {
+    ui.label(format!("{} selected", app.state.selection.len()));
+    if !app.state.selection.is_empty() {
+        transform_group(app, ui);
+    }
     let s = &app.state;
     let u = s.project.units;
     let len = |mm: f64| fmt_len(mm, u);
-    ui.label(format!("{} selected", s.selection.len()));
     if s.selection.len() != 1 {
         return;
     }

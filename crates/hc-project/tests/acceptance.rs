@@ -218,19 +218,19 @@ fn t04_golden_file() {
     assert!(problems.is_empty());
     assert_eq!(loaded, p);
     // M6: v1 is no longer the current format; the byte-exact check moved to the v2 golden (m6_12)
-    assert_eq!(loaded.format_version, 3); // M7: was 2
+    assert_eq!(loaded.format_version, 4); // M10: was 3
 }
 
 #[test]
 fn t05_version_check() {
     let mut v: serde_json::Value =
         serde_json::from_str(&small_project().to_json().unwrap()).unwrap();
-    v["format_version"] = 4.into(); // M7: current is 3
+    v["format_version"] = 5.into(); // M10: current is 4
     assert!(matches!(
         Project::from_json(&v.to_string()),
         Err(ProjectError::VersionTooNew {
-            found: 4,
-            supported: 3
+            found: 5,
+            supported: 4
         })
     ));
     v.as_object_mut().unwrap().remove("format_version");
@@ -512,7 +512,7 @@ fn m6_12_project_v2() {
     let (v1, problems) = Project::from_json(&fs::read_to_string(GOLDEN).unwrap()).unwrap();
     assert!(problems.is_empty());
     assert_eq!(v1.format_version, FORMAT_VERSION);
-    assert_eq!(FORMAT_VERSION, 3); // M7: was 2
+    assert_eq!(FORMAT_VERSION, 4); // M10: was 3
     assert!(v1.operations.iter().all(|o| o.tabs.manual.is_empty()));
     assert_eq!(v1, small_project());
 
@@ -551,7 +551,7 @@ fn m7_13_project_v3() {
     for golden in [GOLDEN, GOLDEN_V2] {
         let (p, problems) = Project::from_json(&fs::read_to_string(golden).unwrap()).unwrap();
         assert!(problems.is_empty());
-        assert_eq!(p.format_version, 3);
+        assert_eq!(p.format_version, 4); // M10: was 3
         assert_eq!(p.machine.safe_z, 5.0);
         assert_eq!(p.machine.tool_change_z, 40.0);
     }
@@ -564,28 +564,192 @@ fn m7_13_project_v3() {
     let (p, _) = Project::from_json(&v.to_string()).unwrap();
     assert_eq!(p.machine.tool_change_z, 50.0);
 
-    // v3 golden: equal to the code-built project, and byte-exact to_json
+    // v3 golden: equal to the code-built project
+    // (M10: no longer byte-exact; the byte-exact and "too new" checks moved to m10_06_project_v4)
     let p = small_project_v2();
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        fs::write(GOLDEN_V3, p.to_json().unwrap()).unwrap();
-    }
     let text = fs::read_to_string(GOLDEN_V3).unwrap();
     assert_eq!(p.machine.tool_change_z, 40.0);
-    assert_eq!(p.format_version, 3);
+    assert_eq!(p.format_version, 4); // M10: was 3
+    let (loaded, problems) = Project::from_json(&text).unwrap();
+    assert!(problems.is_empty());
+    assert_eq!(loaded, p);
+
+    // migrate identity at v3
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(migrate(v.clone(), 3).unwrap(), v);
+}
+
+// ---------------------------------------------------------------- M10 (specs/M10.md tests 4-6)
+
+const GOLDEN_V4: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/project/small_v4.hcam"
+);
+
+/// small_project_v2 + origin Point(10,5) + one drawn rect (the v4 golden file).
+fn small_project_v4() -> Project {
+    let mut p = small_project_v2();
+    p.stock.origin = WorkOrigin::Point(Point::new(10.0, 5.0));
+    let r = hc_geom::shapes::rect(Point::new(20.0, 0.0), 10.0, 5.0, 1.0).unwrap();
+    p.add_drawn(vec![Geom::Contour(r)]);
+    p
+}
+
+#[test]
+fn m10_04_add_drawn() {
+    let mut p = Project::new();
+    let a = hc_geom::shapes::circle(Point::new(0.0, 0.0), 1.0).unwrap();
+    let ids = p.add_drawn(vec![Geom::Contour(a), Geom::Point(Point::new(1.0, 1.0))]);
+    assert_eq!(ids, [1, 2]);
+    assert_eq!(
+        p.layers,
+        [LayerInfo {
+            name: "Drawing".into(),
+            color: 7
+        }]
+    );
+    assert!(p
+        .items
+        .iter()
+        .all(|i| i.source == Source::Drawn && i.layer == "Drawing"));
+    assert_eq!(p.next_id, 3);
+    assert_eq!(p.add_drawn(vec![Geom::Point(Point::new(2.0, 2.0))]), [3]);
+    assert_eq!(p.layers.len(), 1);
+}
+
+#[test]
+fn m10_05_transform_items() {
+    use hc_geom::{shapes, Orientation, Transform};
+    use std::f64::consts::FRAC_PI_2;
+    const T: f64 = 1e-9;
+    let mut p = Project::new();
+    let rect = shapes::rect(Point::new(0.0, 0.0), 10.0, 4.0, 0.0).unwrap();
+    let line = shapes::line(Point::new(1.0, 0.0), Point::new(2.0, 0.0)).unwrap();
+    let circ = shapes::circle(Point::new(3.0, 3.0), 2.5).unwrap();
+    let ids = p.add_drawn(vec![
+        Geom::Contour(rect.clone()),
+        Geom::Point(Point::new(1.0, 1.0)),
+        Geom::Contour(line),
+        Geom::Contour(circ),
+    ]);
+    let c = |p: &Project, id: u64| match &p.items.iter().find(|i| i.id == id).unwrap().geom {
+        Geom::Contour(c) => c.clone(),
+        Geom::Point(_) => panic!("point"),
+    };
+
+    // translate a rect and a point; others untouched, unknown id ignored
+    let mut q = p.clone();
+    q.transform_items(&[ids[0], ids[1], 999], &Transform::translate(5.0, -3.0));
+    let b = c(&q, ids[0]).bbox();
+    assert!(b.min.approx_eq(Point::new(5.0, -3.0), T) && b.max.approx_eq(Point::new(15.0, 1.0), T));
+    assert_eq!(q.items[1].geom, Geom::Point(Point::new(6.0, -2.0)));
+    assert_eq!(q.items[2..], p.items[2..]);
+
+    // rotate 90° about (0,0)
+    let mut q = p.clone();
+    q.transform_items(
+        &[ids[2]],
+        &Transform::rotate(FRAC_PI_2, Point::new(0.0, 0.0)),
+    );
+    let l = c(&q, ids[2]);
+    assert!(l.start().approx_eq(Point::new(0.0, 1.0), T));
+    assert!(l.end().approx_eq(Point::new(0.0, 2.0), T));
+
+    // scale 2 about the circle centre
+    let mut q = p.clone();
+    q.transform_items(&[ids[3]], &Transform::scale(2.0, Point::new(3.0, 3.0)));
+    let k = c(&q, ids[3]).as_circle().unwrap();
+    assert!((k.radius - 5.0).abs() < T);
+    assert!(k.center.approx_eq(Point::new(3.0, 3.0), T));
+
+    // mirror_y(0): Ccw rect becomes Cw with the mirrored bbox; manual tabs keep their fraction
+    let mut q = p.clone();
+    let tool = tool(1);
+    let op = q.add_operation(
+        "c",
+        OpKind::Contour {
+            side: Side::Outside,
+            direction: Direction::Climb,
+        },
+        &tool,
+        vec![ids[0]],
+    );
+    q.operations
+        .iter_mut()
+        .find(|o| o.id == op)
+        .unwrap()
+        .tabs
+        .manual = vec![ManualTabs {
+        item: ids[0],
+        positions: vec![0.25],
+    }];
+    let before = c(&q, ids[0]);
+    q.transform_items(&[ids[0]], &Transform::mirror_y(0.0));
+    let after = c(&q, ids[0]);
+    assert_eq!(before.orientation(), Some(Orientation::Ccw));
+    assert_eq!(after.orientation(), Some(Orientation::Cw));
+    let b = after.bbox();
+    assert!(b.min.approx_eq(Point::new(-10.0, 0.0), T) && b.max.approx_eq(Point::new(0.0, 4.0), T));
+    assert_eq!(q.operations[0].tabs.manual[0].positions, [0.25]);
+    let old = before.point_at(0.25 * before.length());
+    let new = after.point_at(0.25 * after.length());
+    assert!(new.approx_eq(Point::new(-old.x, old.y), T));
+    assert_eq!(q.items[1..], p.items[1..]);
+}
+
+#[test]
+fn m10_06_project_v4() {
+    assert_eq!(
+        serde_json::to_value(WorkOrigin::Point(Point::new(10.0, 5.0))).unwrap(),
+        serde_json::json!({"point": {"x": 10.0, "y": 5.0}})
+    );
+    assert_eq!(
+        serde_json::to_value(WorkOrigin::StockCenter).unwrap(),
+        serde_json::json!("stock_center")
+    );
+    assert_eq!(
+        serde_json::to_value(WorkOrigin::DrawingOrigin).unwrap(),
+        serde_json::json!("drawing_origin")
+    );
+    assert_eq!(
+        serde_json::to_value(WorkOrigin::StockBottomLeft).unwrap(),
+        serde_json::json!("stock_bottom_left")
+    );
+    assert_eq!(FORMAT_VERSION, 4);
+
+    // v1-v3 load as version 4 and equal their code-built projects
+    for (golden, built) in [
+        (GOLDEN, small_project()),
+        (GOLDEN_V2, small_project_v2()),
+        (GOLDEN_V3, small_project_v2()),
+    ] {
+        let (p, problems) = Project::from_json(&fs::read_to_string(golden).unwrap()).unwrap();
+        assert!(problems.is_empty());
+        assert_eq!(p.format_version, 4);
+        assert_eq!(p, built, "{golden}");
+    }
+
+    // v4 golden: byte-exact to_json
+    let p = small_project_v4();
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        fs::write(GOLDEN_V4, p.to_json().unwrap()).unwrap();
+    }
+    let text = fs::read_to_string(GOLDEN_V4).unwrap();
     let (loaded, problems) = Project::from_json(&text).unwrap();
     assert!(problems.is_empty());
     assert_eq!(loaded, p);
     assert_eq!(p.to_json().unwrap(), text);
+    assert!(text.contains("\"point\": {"));
 
-    // migrate identity at v3, version 4 too new
+    // migrate identity at v3, version 5 too new
     let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(migrate(v.clone(), 3).unwrap(), v);
-    v["format_version"] = 4.into();
+    v["format_version"] = 5.into();
     assert!(matches!(
         Project::from_json(&v.to_string()),
         Err(ProjectError::VersionTooNew {
-            found: 4,
-            supported: 3
+            found: 5,
+            supported: 4
         })
     ));
 }

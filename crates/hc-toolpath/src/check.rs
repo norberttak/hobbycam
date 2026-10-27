@@ -494,7 +494,7 @@ fn op_issues(
                         RuleId::SharedEdge,
                         Some(x),
                         format!(
-                            "The {} shares an edge with the {}: the pocket may cut into it",
+                            "The {} touches the {}: the pocket treats them as one wall",
                             describe(project, x),
                             describe(project, y)
                         ),

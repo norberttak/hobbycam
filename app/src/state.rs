@@ -1,13 +1,14 @@
 //! Application state and every project edit. No egui UI code here.
 
 use crate::hit;
+use crate::snap::{self, Snap, SnapKind};
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
-use hc_geom::{BBox, Contour, Point};
+use hc_geom::{shapes, BBox, Contour, Point, Transform, EPS};
 use hc_post::GcodeFile;
 use hc_project::{
-    Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Tool,
-    ToolLibrary, Units,
+    fmt_len, Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Stock,
+    Tool, ToolLibrary, Units, WorkOrigin,
 };
 use hc_sim::{Sim, SimError};
 use hc_toolpath::{Issue, Toolpath, ToolpathError};
@@ -113,6 +114,112 @@ impl SimView {
     }
 }
 
+/// The active canvas tool; Select is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasTool {
+    Select,
+    SetOrigin,
+    Line,
+    Rect,
+    Circle,
+}
+
+impl CanvasTool {
+    /// Status bar hint; `pending` = the first point is already set.
+    pub fn hint(self, pending: bool) -> Option<&'static str> {
+        Some(match (self, pending) {
+            (CanvasTool::Select, _) => return None,
+            (CanvasTool::SetOrigin, _) => "Set origin: click a corner, end or center",
+            (CanvasTool::Line, false) => "Line: click the start point",
+            (CanvasTool::Line, true) => "Line: click the end point",
+            (CanvasTool::Rect, false) => "Rectangle: click a corner",
+            (CanvasTool::Rect, true) => "Rectangle: click the opposite corner",
+            (CanvasTool::Circle, false) => "Circle: click the center",
+            (CanvasTool::Circle, true) => "Circle: click a point on the circle",
+        })
+    }
+}
+
+/// A shape to add; becomes a plain contour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shape {
+    Line { a: Point, b: Point },
+    Rect { min: Point, w: f64, h: f64, r: f64 },
+    Circle { c: Point, r: f64 },
+}
+
+/// Persistent draw form values (mm). `a` = line start, rectangle bottom left, circle centre; `b` = line end.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawForm {
+    pub a: Point,
+    pub b: Point,
+    pub w: f64,
+    pub h: f64,
+    pub r: f64,
+    /// Circle diameter.
+    pub d: f64,
+}
+
+impl Default for DrawForm {
+    fn default() -> DrawForm {
+        DrawForm {
+            a: Point::new(0.0, 0.0),
+            b: Point::new(0.0, 0.0),
+            w: 20.0,
+            h: 20.0,
+            r: 0.0,
+            d: 10.0,
+        }
+    }
+}
+
+impl DrawForm {
+    /// The shape of `tool` from the form values; None for Select / SetOrigin.
+    pub fn shape(&self, tool: CanvasTool) -> Option<Shape> {
+        match tool {
+            CanvasTool::Line => Some(Shape::Line {
+                a: self.a,
+                b: self.b,
+            }),
+            CanvasTool::Rect => Some(Shape::Rect {
+                min: self.a,
+                w: self.w,
+                h: self.h,
+                r: self.r,
+            }),
+            CanvasTool::Circle => Some(Shape::Circle {
+                c: self.a,
+                r: self.d / 2.0,
+            }),
+            CanvasTool::Select | CanvasTool::SetOrigin => None,
+        }
+    }
+}
+
+/// Transform form values: move by (dx, dy) mm, rotate by `angle_deg` (CCW), scale by `factor`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct XformForm {
+    pub dx: f64,
+    pub dy: f64,
+    pub angle_deg: f64,
+    pub factor: f64,
+}
+
+impl Default for XformForm {
+    fn default() -> XformForm {
+        XformForm {
+            dx: 0.0,
+            dy: 0.0,
+            angle_deg: 90.0,
+            factor: 2.0,
+        }
+    }
+}
+
+/// Undo history depth (whole-project snapshots).
+/// shortcut: full clones, a few hundred MB for big DXF projects; lower the depth or share items via Arc if it bites.
+pub const UNDO_DEPTH: usize = 100;
+
 pub struct AppState {
     pub project: Project,
     pub path: Option<PathBuf>,
@@ -146,6 +253,19 @@ pub struct AppState {
     /// `hc_sim::simulate` of `toolpaths`, refreshed with them.
     pub sim: Result<Sim, SimError>,
     pub sim_view: SimView,
+    pub tool: CanvasTool,
+    pub draw: DrawForm,
+    pub xform: XformForm,
+    /// First click of a two-click drawing tool.
+    pub pending: Option<Point>,
+    /// (item index, point, kind), rebuilt in `items_changed`.
+    pub snap_cache: Vec<(usize, Point, SnapKind)>,
+    pub undo: Vec<Project>,
+    pub redo: Vec<Project>,
+    /// The last committed state.
+    pub undo_base: Project,
+    /// The state on disk (or the fresh project).
+    pub saved: Project,
 }
 
 impl AppState {
@@ -186,6 +306,15 @@ impl AppState {
             show_toolpaths: true,
             sim: Ok(Sim::default()),
             sim_view: SimView::default(),
+            tool: CanvasTool::Select,
+            draw: DrawForm::default(),
+            xform: XformForm::default(),
+            pending: None,
+            snap_cache: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            undo_base: Project::new(),
+            saved: Project::new(),
         };
         if let Some(e) = s.library_error.clone() {
             s.msg(Severity::Error, format!("Tool library: {e}"));
@@ -256,6 +385,7 @@ impl AppState {
 
     fn items_changed(&mut self) {
         self.item_bbox = self.project.items.iter().map(hit::item_bbox).collect();
+        self.snap_cache = snap::build_cache(&self.project.items);
         let ids: HashSet<u64> = self.project.items.iter().map(|i| i.id).collect();
         self.selection.retain(|id| ids.contains(id));
     }
@@ -290,6 +420,11 @@ impl AppState {
         self.hidden_layers.clear();
         self.items_changed();
         self.fit_pending = true;
+        self.pending = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.undo_base = self.project.clone();
+        self.saved = self.project.clone();
     }
 
     pub fn new_project(&mut self) {
@@ -357,8 +492,12 @@ impl AppState {
     /// First import into an untouched project: stock = drawing bbox (thickness and origin kept).
     fn fit_stock_to_items(&mut self) {
         let b = self.items_bbox();
-        let untouched =
-            self.project.stock == Project::new().stock && self.project.operations.is_empty();
+        // the origin choice does not count as touching the stock
+        let fresh = Stock {
+            origin: self.project.stock.origin,
+            ..Project::new().stock
+        };
+        let untouched = self.project.stock == fresh && self.project.operations.is_empty();
         if untouched && !b.is_empty() && b.width() > 0.0 && b.height() > 0.0 {
             let s = &mut self.project.stock;
             s.min_x = b.min.x;
@@ -405,6 +544,7 @@ impl AppState {
             Ok(()) => {
                 self.path = Some(path.to_path_buf());
                 self.dirty = false;
+                self.saved = self.project.clone();
                 true
             }
             Err(e) => {
@@ -420,6 +560,20 @@ impl AppState {
     pub fn set_machine(&mut self, m: Machine) {
         if self.project.machine != m {
             self.project.machine = m;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_stock(&mut self, s: Stock) {
+        if self.project.stock != s {
+            self.project.stock = s;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_origin(&mut self, o: WorkOrigin) {
+        if self.project.stock.origin != o {
+            self.project.stock.origin = o;
             self.dirty = true;
         }
     }
@@ -574,6 +728,195 @@ impl AppState {
             .iter()
             .filter(|i| i.layer == layer)
             .count()
+    }
+
+    // ---------------------------------------------------------------- canvas tools and drawing
+
+    pub fn set_tool(&mut self, t: CanvasTool) {
+        self.tool = t;
+        self.pending = None;
+    }
+
+    /// Escape: drops a pending first point, else leaves the tool, else clears the selection.
+    pub fn escape(&mut self) {
+        if self.pending.is_some() {
+            self.pending = None;
+        } else if self.tool != CanvasTool::Select {
+            self.tool = CanvasTool::Select;
+        } else {
+            self.clear_selection();
+            self.selected_tab = None;
+        }
+    }
+
+    pub fn snap_at(&self, p: Point, radius: f64) -> Option<Snap> {
+        snap::nearest(
+            &self.snap_cache,
+            &self.project.items,
+            |i| self.is_visible(i),
+            p,
+            radius,
+        )
+    }
+
+    /// A primary click of the active tool at `p` (already snapped when `snapped`).
+    pub fn canvas_click(&mut self, p: Point, snapped: bool) {
+        match self.tool {
+            CanvasTool::Select => {}
+            CanvasTool::SetOrigin => {
+                if snapped {
+                    self.set_origin(WorkOrigin::Point(p));
+                    self.tool = CanvasTool::Select;
+                }
+            }
+            CanvasTool::Line | CanvasTool::Rect | CanvasTool::Circle => {
+                let Some(first) = self.pending.take() else {
+                    self.pending = Some(p);
+                    self.draw.a = p;
+                    return;
+                };
+                let f = &mut self.draw;
+                match self.tool {
+                    CanvasTool::Line => (f.a, f.b) = (first, p),
+                    CanvasTool::Rect => {
+                        f.a = Point::new(first.x.min(p.x), first.y.min(p.y));
+                        (f.w, f.h) = ((p.x - first.x).abs(), (p.y - first.y).abs());
+                    }
+                    _ => (f.a, f.d) = (first, 2.0 * first.distance(p)),
+                }
+                let shape = self.draw.shape(self.tool).expect("drawing tool");
+                if let Err(e) = self.add_shape(shape) {
+                    self.msg(Severity::Warning, e);
+                }
+            }
+        }
+    }
+
+    /// Validates and adds the shape on layer Drawing; the new items become the selection.
+    pub fn add_shape(&mut self, s: Shape) -> Result<Vec<u64>, String> {
+        let contour = match s {
+            Shape::Line { a, b } => shapes::line(a, b).ok_or("Line is too short")?,
+            Shape::Rect { min, w, h, r } => {
+                if !(w >= EPS && h >= EPS && w.is_finite() && h.is_finite()) {
+                    return Err("Rectangle needs a width and a height".into());
+                }
+                if r.is_nan() || r < 0.0 {
+                    return Err("Corner radius must be 0 or more".into());
+                }
+                let half = w.min(h) / 2.0;
+                shapes::rect(min, w, h, r).ok_or_else(|| {
+                    format!(
+                        "Corner radius must be at most {}",
+                        fmt_len(half, self.project.units)
+                    )
+                })?
+            }
+            Shape::Circle { c, r } => shapes::circle(c, r).ok_or("Circle needs a diameter")?,
+        };
+        let ids = self.project.add_drawn(vec![Geom::Contour(contour)]);
+        self.items_changed();
+        self.selection = ids.iter().copied().collect();
+        self.dirty = true;
+        Ok(ids)
+    }
+
+    /// Union of the selected items' bboxes (empty when nothing is selected).
+    pub fn selection_bbox(&self) -> BBox {
+        self.project
+            .items
+            .iter()
+            .zip(&self.item_bbox)
+            .filter(|(i, _)| self.selection.contains(&i.id))
+            .fold(BBox::empty(), |acc, (_, b)| acc.union(b))
+    }
+
+    pub fn selection_center(&self) -> Point {
+        let b = self.selection_bbox();
+        Point::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0)
+    }
+
+    /// No-op on an empty selection or a degenerate / non-finite transform (it would collapse the part).
+    pub fn transform_selection(&mut self, t: &Transform) {
+        let finite = [t.a, t.b, t.c, t.d, t.tx, t.ty]
+            .iter()
+            .all(|v| v.is_finite());
+        if self.selection.is_empty() || !finite || (t.a * t.d - t.b * t.c).abs() <= 1e-12 {
+            return;
+        }
+        let ids: Vec<u64> = self.selection.iter().copied().collect();
+        self.project.transform_items(&ids, t);
+        self.items_changed();
+        self.dirty = true;
+    }
+
+    /// Removes the selected items and their op references / manual tabs.
+    pub fn delete_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        for id in std::mem::take(&mut self.selection) {
+            self.project.remove_item(id);
+        }
+        self.selected_tab = None;
+        self.items_changed();
+        self.dirty = true;
+    }
+
+    // ---------------------------------------------------------------- undo / redo
+
+    /// Records the project as one undo step when it changed since the last commit and the user is idle
+    /// (no button down, no text focus), so a drag or typing is one step.
+    pub fn commit_undo(&mut self, idle: bool) {
+        if !idle || self.project == self.undo_base {
+            return;
+        }
+        let prev = std::mem::replace(&mut self.undo_base, self.project.clone());
+        self.undo.push(prev);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty() || self.project != self.undo_base
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn undo(&mut self) -> bool {
+        self.commit_undo(true);
+        let Some(p) = self.undo.pop() else {
+            return false;
+        };
+        let cur = std::mem::replace(&mut self.project, p);
+        self.redo.push(cur);
+        self.history_moved();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(p) = self.redo.pop() else {
+            return false;
+        };
+        let cur = std::mem::replace(&mut self.project, p);
+        self.undo.push(cur);
+        self.history_moved();
+        true
+    }
+
+    fn history_moved(&mut self) {
+        self.undo_base = self.project.clone();
+        self.items_changed();
+        self.selected_tab = None;
+        let ops = &self.project.operations;
+        self.selected_op = self
+            .selected_op
+            .filter(|id| ops.iter().any(|o| o.id == *id));
+        self.pending = None;
+        self.dirty = self.project != self.saved;
     }
 
     // ---------------------------------------------------------------- operations
@@ -2304,5 +2647,462 @@ mod edge_tests {
         e.toggle_play();
         e.advance(0.05);
         assert_eq!((e.sim_view.t, e.sim_view.playing), (0.0, false));
+    }
+}
+
+#[cfg(test)]
+mod m10_tests {
+    use super::tests::{bracket_clean, bracket_path, edit_op, outer, scratch, tool};
+    use super::*;
+
+    const T: f64 = 1e-9;
+
+    fn p(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    fn only_item(s: &AppState) -> &Item {
+        assert_eq!(s.project.items.len(), 1);
+        &s.project.items[0]
+    }
+
+    fn rect_state() -> AppState {
+        let mut s = AppState::new(None);
+        s.add_shape(Shape::Rect {
+            min: p(10.0, 20.0),
+            w: 30.0,
+            h: 10.0,
+            r: 0.0,
+        })
+        .unwrap();
+        s
+    }
+
+    /// First G-code word value `k` of the first line starting with `prefix`.
+    fn first_word(text: &str, prefix: &str, k: char) -> f64 {
+        let line = text.lines().find(|l| l.starts_with(prefix)).unwrap();
+        line.split(' ')
+            .find_map(|w| w.strip_prefix(k))
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn m10_11_set_origin() {
+        let (mut s, _) = bracket_clean();
+        s.refresh_toolpaths();
+        let before = s.gcode().unwrap();
+        s.dirty = false;
+        let edge = outer(&s);
+        let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
+        let corner = s
+            .snap_cache
+            .iter()
+            .find(|(i, _, k)| *i == idx && *k == SnapKind::Corner)
+            .unwrap()
+            .1;
+
+        // no snap: nothing happens, the tool stays
+        s.set_tool(CanvasTool::SetOrigin);
+        s.canvas_click(p(corner.x + 3.0, corner.y), false);
+        assert_eq!(s.project.stock.origin, WorkOrigin::DrawingOrigin);
+        assert!(!s.dirty);
+        assert_eq!(s.tool, CanvasTool::SetOrigin);
+
+        s.canvas_click(corner, true);
+        assert_eq!(s.project.stock.origin, WorkOrigin::Point(corner));
+        assert!(s.dirty);
+        assert_eq!(s.tool, CanvasTool::Select);
+        s.refresh_toolpaths();
+        assert_eq!(s.toolpaths_for.as_ref(), Some(&s.project));
+        let after = s.gcode().unwrap();
+        let (x0, x1) = (
+            first_word(&before[0].text, "G0 X", 'X'),
+            first_word(&after[0].text, "G0 X", 'X'),
+        );
+        assert!((x0 - corner.x - x1).abs() < 1e-3, "{x0} {x1}");
+
+        s.set_tool(CanvasTool::SetOrigin);
+        s.escape();
+        assert_eq!(s.tool, CanvasTool::Select);
+        s.dirty = false;
+        s.set_origin(WorkOrigin::Point(corner));
+        assert!(!s.dirty);
+    }
+
+    #[test]
+    fn m10_12_drawing() {
+        let mut s = AppState::new(None);
+        s.set_tool(CanvasTool::Line);
+        s.canvas_click(p(0.0, 0.0), false);
+        assert_eq!(s.pending, Some(p(0.0, 0.0)));
+        assert!(s.project.items.is_empty());
+        s.canvas_click(p(10.0, 0.0), false);
+        let it = only_item(&s);
+        let id = it.id;
+        assert_eq!(it.layer, "Drawing");
+        assert!(matches!(&it.geom, Geom::Contour(c) if !c.closed && (c.length() - 10.0).abs() < T));
+        assert_eq!(s.selection, [id].into_iter().collect());
+        assert!(s.dirty);
+        assert_eq!(s.pending, None);
+        assert_eq!(s.tool, CanvasTool::Line);
+
+        // rectangle from two opposite corners
+        let mut s = AppState::new(None);
+        s.set_tool(CanvasTool::Rect);
+        s.canvas_click(p(30.0, 20.0), false);
+        s.canvas_click(p(10.0, 40.0), false);
+        let b = s.item_bbox[0];
+        assert!(b.min.approx_eq(p(10.0, 20.0), T) && b.max.approx_eq(p(30.0, 40.0), T));
+        assert_eq!((s.draw.a, s.draw.w, s.draw.h), (p(10.0, 20.0), 20.0, 20.0));
+        // the same point twice
+        s.canvas_click(p(5.0, 5.0), false);
+        s.canvas_click(p(5.0, 5.0), false);
+        assert_eq!(s.project.items.len(), 1);
+        assert_eq!(
+            s.messages.last().unwrap(),
+            &Message {
+                severity: Severity::Warning,
+                text: "Rectangle needs a width and a height".into()
+            }
+        );
+        assert_eq!(s.pending, None);
+
+        // circle: centre then rim
+        let mut s = AppState::new(None);
+        s.set_tool(CanvasTool::Circle);
+        s.canvas_click(p(0.0, 0.0), false);
+        s.canvas_click(p(3.0, 4.0), false);
+        let Geom::Contour(c) = &only_item(&s).geom else {
+            panic!()
+        };
+        assert!((c.as_circle().unwrap().radius - 5.0).abs() < T);
+
+        // a snapped first click lands exactly on the candidate
+        let mut s = rect_state();
+        s.set_tool(CanvasTool::Line);
+        let snap = s.snap_at(p(10.5, 20.3), 1.0).unwrap();
+        assert_eq!(snap.p, p(10.0, 20.0));
+        s.canvas_click(snap.p, true);
+        s.canvas_click(p(0.0, 0.0), false);
+        let Geom::Contour(c) = &s.project.items[1].geom else {
+            panic!()
+        };
+        assert_eq!(c.start(), p(10.0, 20.0));
+
+        // corner radius too large
+        let mut s = AppState::new(None);
+        let e = s
+            .add_shape(Shape::Rect {
+                min: p(0.0, 0.0),
+                w: 10.0,
+                h: 10.0,
+                r: 6.0,
+            })
+            .unwrap_err();
+        assert_eq!(e, "Corner radius must be at most 5.000 mm");
+        assert!(s.project.items.is_empty() && !s.dirty);
+        assert_eq!(
+            s.add_shape(Shape::Line {
+                a: p(1.0, 1.0),
+                b: p(1.0, 1.0)
+            }),
+            Err("Line is too short".into())
+        );
+        assert_eq!(
+            s.add_shape(Shape::Circle {
+                c: p(1.0, 1.0),
+                r: 0.0
+            }),
+            Err("Circle needs a diameter".into())
+        );
+        // escape: pending first, then the tool
+        s.set_tool(CanvasTool::Rect);
+        s.canvas_click(p(1.0, 1.0), false);
+        s.escape();
+        assert_eq!((s.pending, s.tool), (None, CanvasTool::Rect));
+        s.escape();
+        assert_eq!(s.tool, CanvasTool::Select);
+    }
+
+    #[test]
+    fn m10_13_transforms_and_delete() {
+        let mut s = rect_state();
+        let b0 = s.selection_bbox();
+        s.transform_selection(&Transform::translate(5.0, 0.0));
+        let b = s.selection_bbox();
+        assert!(b.min.approx_eq(p(b0.min.x + 5.0, b0.min.y), T));
+        assert!(b.max.approx_eq(p(b0.max.x + 5.0, b0.max.y), T));
+
+        let mut s = rect_state();
+        let c = s.selection_center();
+        s.transform_selection(&Transform::rotate(90f64.to_radians(), c));
+        let b = s.selection_bbox();
+        assert!(s.selection_center().approx_eq(c, 1e-9));
+        assert!((b.width() - 10.0).abs() < T && (b.height() - 30.0).abs() < T);
+
+        let mut s = rect_state();
+        s.transform_selection(&Transform::scale(2.0, c));
+        let b = s.selection_bbox();
+        assert!(s.selection_center().approx_eq(c, 1e-9));
+        assert!((b.width() - 60.0).abs() < T && (b.height() - 20.0).abs() < T);
+
+        let mut s = rect_state();
+        let orig = s.project.items.clone();
+        s.transform_selection(&Transform::mirror_y(c.x));
+        s.transform_selection(&Transform::mirror_y(c.x));
+        let (Geom::Contour(a), Geom::Contour(b)) = (&orig[0].geom, &s.project.items[0].geom) else {
+            panic!()
+        };
+        assert_eq!(a.segments.len(), b.segments.len());
+        for (x, y) in a.segments.iter().zip(&b.segments) {
+            assert!(x.start().approx_eq(y.start(), T) && x.end().approx_eq(y.end(), T));
+        }
+
+        // empty selection: no change, not dirty
+        let mut s = rect_state();
+        s.clear_selection();
+        s.dirty = false;
+        let before = s.project.clone();
+        s.transform_selection(&Transform::translate(1.0, 1.0));
+        s.delete_selection();
+        assert_eq!(s.project, before);
+        assert!(!s.dirty);
+
+        // delete an item used by an op with manual tabs
+        let (mut s, outside) = bracket_clean();
+        let edge = outer(&s);
+        edit_op(&mut s, outside, |o| {
+            o.tabs.manual = vec![ManualTabs {
+                item: edge,
+                positions: vec![0.5],
+            }]
+        });
+        s.dirty = false;
+        s.selection = [edge].into_iter().collect();
+        s.delete_selection();
+        assert!(s.item(edge).is_none());
+        let op = s
+            .project
+            .operations
+            .iter()
+            .find(|o| o.id == outside)
+            .unwrap();
+        assert!(op.items.is_empty() && op.tabs.manual.is_empty());
+        assert!(s.selection.is_empty() && s.dirty);
+        assert_eq!(s.item_bbox.len(), s.project.items.len());
+        assert!(s
+            .snap_cache
+            .iter()
+            .all(|(i, _, _)| *i < s.project.items.len()));
+    }
+
+    #[test]
+    fn m10_14_stock() {
+        let mut s = AppState::new(None);
+        let mut st = s.project.stock.clone();
+        s.set_stock(st.clone());
+        assert!(!s.dirty);
+        st.thickness = 12.0;
+        s.set_stock(st);
+        assert!(s.dirty);
+
+        let mut s = AppState::new(None);
+        s.new_project();
+        s.set_origin(WorkOrigin::StockCenter);
+        assert!(s.import_dxf(&bracket_path()));
+        let b = s.items_bbox();
+        let st = &s.project.stock;
+        assert!((st.min_x - b.min.x).abs() < T && (st.width - b.width()).abs() < T);
+        assert_eq!(st.origin, WorkOrigin::StockCenter);
+    }
+
+    #[test]
+    fn m10_16_undo_basics() {
+        let mut s = AppState::new(None);
+        let p0 = s.project.clone();
+        s.add_shape(Shape::Rect {
+            min: p(0.0, 0.0),
+            w: 10.0,
+            h: 10.0,
+            r: 0.0,
+        })
+        .unwrap();
+        s.commit_undo(true);
+        let p1 = s.project.clone();
+        s.transform_selection(&Transform::translate(5.0, 0.0));
+        s.commit_undo(true);
+        let p2 = s.project.clone();
+        s.delete_selection();
+        s.commit_undo(true);
+        let p3 = s.project.clone();
+        for want in [&p2, &p1, &p0] {
+            assert!(s.undo());
+            assert_eq!(&s.project, want);
+        }
+        assert!(!s.undo());
+        for want in [&p1, &p2, &p3] {
+            assert!(s.redo());
+            assert_eq!(&s.project, want);
+        }
+        assert!(!s.redo());
+        s.undo();
+        assert!(s.can_redo());
+        s.set_origin(WorkOrigin::StockCenter);
+        s.commit_undo(true);
+        assert!(!s.can_redo());
+
+        // each kind of edit is undoable
+        let (mut s, outside) = bracket_clean();
+        s.commit_undo(true);
+        let edits: [fn(&mut AppState, u64); 5] = [
+            |s, _| s.set_origin(WorkOrigin::StockBottomLeft),
+            |s, _| {
+                let mut st = s.project.stock.clone();
+                st.thickness = 3.0;
+                s.set_stock(st)
+            },
+            |s, outside| edit_op(s, outside, |o| o.depth = 4.0),
+            |s, outside| {
+                s.select_op(outside);
+                let (item, _, pos) = s.tab_markers()[0].clone();
+                let c = match &s.item(item).unwrap().geom {
+                    Geom::Contour(c) => c.clone(),
+                    _ => panic!(),
+                };
+                let at = c.point_at((pos[0] + 0.01) * c.length());
+                s.move_tab(item, 0, at);
+            },
+            |s, _| assert!(s.import_dxf(&bracket_path())),
+        ];
+        for (k, edit) in edits.iter().enumerate() {
+            let before = s.project.clone();
+            edit(&mut s, outside);
+            assert_ne!(s.project, before, "edit {k}");
+            s.commit_undo(true);
+            assert!(s.undo());
+            assert_eq!(s.project, before, "edit {k}");
+        }
+    }
+
+    #[test]
+    fn m10_17_coalescing() {
+        let (mut s, outside) = bracket_clean();
+        s.commit_undo(true);
+        let n = s.undo.len();
+        let before = s.project.clone();
+        for k in 0..10 {
+            edit_op(&mut s, outside, |o| o.depth = 0.5 + k as f64);
+            s.commit_undo(false);
+        }
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n + 1);
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n + 1);
+        assert!(s.undo());
+        assert_eq!(s.project, before);
+    }
+
+    #[test]
+    fn m10_18_depth() {
+        let mut s = AppState::new(None);
+        let mut states = vec![s.project.clone()];
+        for k in 0..105 {
+            let mut st = s.project.stock.clone();
+            st.thickness = 1.0 + k as f64;
+            s.set_stock(st);
+            s.commit_undo(true);
+            states.push(s.project.clone());
+        }
+        assert_eq!(s.undo.len(), UNDO_DEPTH);
+        for k in 0..100 {
+            assert!(s.undo(), "{k}");
+            assert_eq!(s.project, states[104 - k]);
+        }
+        assert!(!s.undo());
+        // the oldest 5 states (0..5) are gone
+        assert_eq!(s.project, states[5]);
+    }
+
+    #[test]
+    fn m10_19_dirty() {
+        let dir = scratch("m10_19");
+        let path = dir.join("a.hcam");
+        let (mut s, _) = bracket_clean();
+        assert!(s.save_as(&path));
+        let mut s2 = AppState::new(None);
+        assert!(s2.open(&path));
+        let mut s = s2;
+        assert!(!s.dirty);
+        s.set_origin(WorkOrigin::StockCenter);
+        s.commit_undo(true);
+        assert!(s.dirty);
+        assert!(s.undo());
+        assert!(!s.dirty);
+        assert!(s.redo());
+        assert!(s.dirty);
+        assert!(s.save_as(&path));
+        assert!(!s.dirty);
+        assert!(s.undo());
+        assert!(s.dirty);
+
+        // an uncommitted change is committed first, so it can be redone
+        let mut s = AppState::new(None);
+        s.set_origin(WorkOrigin::StockCenter);
+        let changed = s.project.clone();
+        assert!(s.can_undo());
+        assert!(s.undo());
+        assert_eq!(s.project.stock.origin, WorkOrigin::DrawingOrigin);
+        assert!(s.redo());
+        assert_eq!(s.project, changed);
+    }
+
+    #[test]
+    fn m10_20_reset_and_scope() {
+        let mut s = rect_state();
+        s.commit_undo(true);
+        assert!(s.can_undo());
+        s.new_project();
+        assert!(!s.can_undo() && !s.can_redo());
+        let dir = scratch("m10_20");
+        let path = dir.join("a.hcam");
+        let mut s = rect_state();
+        assert!(s.save_as(&path));
+        s.commit_undo(true);
+        assert!(s.open(&path));
+        assert!(!s.can_undo());
+
+        // selection, hidden layers and the library are not in the history
+        let mut s = AppState::new(Some(dir.join("tools.json")));
+        assert!(s.library_add(tool(3)));
+        s.commit_undo(true);
+        assert!(!s.can_undo());
+        assert!(!s.undo());
+        assert_eq!(s.library.tools.len(), 1);
+        let ids = s
+            .add_shape(Shape::Circle {
+                c: p(0.0, 0.0),
+                r: 2.0,
+            })
+            .unwrap();
+        s.commit_undo(true);
+        s.selection = ids.iter().copied().collect();
+        s.set_layer_visible("Drawing", false);
+        s.selection = ids.iter().copied().collect();
+        s.delete_selection();
+        s.commit_undo(true);
+        s.selected_tab = Some((ids[0], 0));
+        assert!(s.undo());
+        assert_eq!(s.project.items.len(), 1);
+        assert!(s.selection.is_empty());
+        assert!(s.hidden_layers.contains("Drawing"));
+        assert_eq!(s.library.tools.len(), 1);
+        assert_eq!(s.item_bbox.len(), 1);
+        assert_eq!(s.snap_cache, snap::build_cache(&s.project.items));
+        assert_eq!(s.selected_tab, None);
+        s.selection = ids.iter().copied().collect();
+        assert!(s.undo()); // back to empty: the selected item no longer exists
+        assert!(s.selection.is_empty());
     }
 }

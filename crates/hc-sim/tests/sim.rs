@@ -403,3 +403,47 @@ fn drill_below_r_plane_retracts_before_xy() {
     assert_eq!(s.steps[2].to, p(10.0, 0.0, 2.0));
     assert_eq!(s.steps.last().unwrap().to, p(10.0, 0.0, 2.0));
 }
+
+/// M10 test 8: the work origin never reaches generate/simulate.
+#[test]
+fn m10_08_total_independent_of_work_origin() {
+    use hc_geom::shapes;
+    use hc_project::{Direction, Geom, OpKind, Project, Side, Tool, ToolKind, WorkOrigin};
+    let mut pr = Project::new();
+    let ids = pr.add_drawn(vec![Geom::Contour(
+        shapes::rect(Point::new(10.0, 10.0), 30.0, 20.0, 2.0).unwrap(),
+    )]);
+    let tool = Tool {
+        id: 1,
+        name: "Flat".into(),
+        kind: ToolKind::FlatEndMill,
+        diameter: 3.175,
+        flute_length: 12.0,
+        flutes: 2,
+        feed: 600.0,
+        plunge_feed: 150.0,
+        rpm: 16000,
+        depth_per_pass: 1.0,
+        stepover_pct: 45.0,
+        comment: String::new(),
+    };
+    let kind = OpKind::Contour {
+        side: Side::Outside,
+        direction: Direction::Climb,
+    };
+    pr.add_operation("c", kind, &tool, ids);
+    let total = |o: WorkOrigin| {
+        let mut q = pr.clone();
+        q.stock.origin = o;
+        simulate(&hc_toolpath::generate(&q), R).unwrap().total()
+    };
+    let t0 = total(WorkOrigin::DrawingOrigin);
+    assert!(t0 > 0.0);
+    for o in [
+        WorkOrigin::StockBottomLeft,
+        WorkOrigin::StockCenter,
+        WorkOrigin::Point(Point::new(10.0, 5.0)),
+    ] {
+        assert_eq!(total(o), t0);
+    }
+}

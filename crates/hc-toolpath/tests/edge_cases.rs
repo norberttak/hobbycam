@@ -575,7 +575,8 @@ fn touching_island(ix: f64) {
         for s in &c.segments {
             let q = s.start();
             assert!(
-                q.distance(p(ix, 0.0)) >= 13.0 - T,
+                // M10 review fix 1: a touching island is shrunk by ISLAND_CLEARANCE (5e-4 mm)
+                q.distance(p(ix, 0.0)) >= 13.0 - 5e-4 - T,
                 "ring enters island at {q:?}"
             );
             assert!(

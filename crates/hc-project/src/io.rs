@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Current project format version.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 /// Current tool library format version (its schema is unchanged since v1).
 pub const LIBRARY_FORMAT_VERSION: u32 = 1;
 
@@ -34,6 +34,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
 /// Upgrade an older project file's JSON to the current format.
 /// v1 → v2: every `operations[].tabs` object gets `"manual": []` (a missing tabs object is left to serde).
 /// v2 → v3: `machine.tool_change_z = max(machine.safe_z, 40)` when absent (missing machine/safe_z is left to serde).
+/// v3 → v4: no change (new variant only).
 pub fn migrate(mut value: Value, found: u32) -> Result<Value, ProjectError> {
     if found < 2 {
         if let Some(ops) = value.get_mut("operations").and_then(Value::as_array_mut) {

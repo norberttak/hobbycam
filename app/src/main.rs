@@ -3,9 +3,12 @@
 mod aci;
 mod canvas;
 mod hit;
+#[cfg(test)]
+mod m10_verify;
 mod panels;
 #[cfg(test)]
 mod shot;
+mod snap;
 mod state;
 mod tool_dialog;
 mod view;
@@ -101,6 +104,9 @@ impl App {
         self.guard_modal(&ctx);
         self.export_modal(&ctx);
         tool_dialog::show(self, &ctx);
+        // one undo step per finished gesture: a drag or typing commits on release / focus loss
+        let idle = !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input();
+        self.state.commit_undo(idle);
     }
 
     /// Runs `p` now, or asks first when there are unsaved changes.
@@ -473,5 +479,139 @@ mod kittest {
         assert!(h
             .query_by_label("Not simulated: 1 operation with errors")
             .is_some());
+    }
+
+    fn fresh() -> Harness<'static, App> {
+        harness_for(AppState::new(None))
+    }
+
+    fn disabled(h: &Harness<'static, App>, label: &str) -> bool {
+        use egui_kittest::kittest::NodeT;
+        h.get_by_label(label).accesskit_node().is_disabled()
+    }
+
+    fn open_menu(h: &mut Harness<'static, App>, name: &str) {
+        h.get_by_label(name).click();
+        h.run();
+    }
+
+    fn close_menu(h: &mut Harness<'static, App>) {
+        h.key_press(egui::Key::Escape);
+        h.run();
+    }
+
+    /// M10 test 21.
+    #[test]
+    fn m10_t21_edit_menu_and_undo_shortcuts() {
+        let mut h = fresh();
+        h.run();
+        open_menu(&mut h, "Edit");
+        assert!(disabled(&h, "Undo") && disabled(&h, "Redo"));
+        close_menu(&mut h);
+
+        open_menu(&mut h, "Draw");
+        h.get_by_label("Rectangle").click();
+        h.run();
+        h.get_by_label("Add").click();
+        h.run();
+        assert_eq!(h.state().state.project.items.len(), 1);
+        open_menu(&mut h, "Edit");
+        assert!(!disabled(&h, "Undo") && disabled(&h, "Redo"));
+        close_menu(&mut h);
+
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert!(h.state().state.project.items.is_empty());
+        h.key_press_modifiers(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::Z,
+        );
+        h.run();
+        assert_eq!(h.state().state.project.items.len(), 1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert!(h.state().state.project.items.is_empty());
+        h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Y);
+        h.run();
+        assert_eq!(h.state().state.project.items.len(), 1);
+
+        // a focused text field keeps Cmd+Z
+        h.get_by_label("Width").focus();
+        h.run();
+        assert!(h.ctx.egui_wants_keyboard_input());
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert_eq!(h.state().state.project.items.len(), 1);
+    }
+
+    /// M10 test 22.
+    #[test]
+    fn m10_t22_draw_menu_form_transform_stock() {
+        let mut h = fresh();
+        h.run();
+        open_menu(&mut h, "Draw");
+        for name in ["Select", "Line", "Rectangle", "Circle", "Set origin"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        h.get_by_label("Set origin").click();
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::SetOrigin);
+        assert!(h
+            .query_by_label("Set origin: click a corner, end or center · Esc cancels")
+            .is_some());
+        h.hover_at(egui::pos2(640.0, 400.0)); // the canvas
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Select);
+
+        // Line form
+        open_menu(&mut h, "Draw");
+        h.get_by_label("Line").click();
+        h.run();
+        for name in ["X1", "Y1", "X2", "Y2", "Add"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        h.get_by_label("X2").set_value_accesskit(12.0);
+        h.run();
+        h.get_by_label("Y2").set_value_accesskit(5.0);
+        h.run();
+        h.get_by_label("Add").click();
+        h.run();
+        let s = &h.state().state;
+        assert_eq!(s.project.items.len(), 1);
+        assert_eq!(s.item_bbox[0].max, hc_geom::Point::new(12.0, 5.0));
+
+        // one item selected: transform group
+        open_menu(&mut h, "Draw");
+        h.get_by_label("Select").click();
+        h.run();
+        for name in [
+            "Move",
+            "Rotate",
+            "Scale",
+            "Flip horizontally",
+            "Flip vertically",
+            "Delete",
+        ] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        h.get_by_label("Delete").click();
+        h.run();
+        assert!(h.state().state.project.items.is_empty());
+
+        // Settings > Stock
+        open_menu(&mut h, "Settings");
+        h.get_by_label("Stock").hover();
+        h.run();
+        for name in ["Thickness", "Picked point", "Pick on drawing"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        h.get_by_label("Stock center").click();
+        h.run();
+        assert_eq!(
+            h.state().state.project.stock.origin,
+            hc_project::WorkOrigin::StockCenter
+        );
     }
 }

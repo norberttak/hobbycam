@@ -95,6 +95,23 @@ pub fn offset_closed(c: &Contour, dist: f64) -> Vec<Contour> {
         .collect()
 }
 
+/// Gap (mm) forced between an island and a wall it comes within the tool radius of.
+pub(crate) const ISLAND_CLEARANCE: f64 = 5e-4;
+
+/// True when a sample of `c` (segment ends plus points every <= r/2) lies within `r` of `other`.
+fn comes_within(c: &Contour, other: &Contour, r: f64) -> bool {
+    let step = r / 2.0;
+    c.segments.iter().any(|s| {
+        let len = s.length();
+        let n = if step > 0.0 {
+            (len / step).ceil().max(1.0) as usize
+        } else {
+            1
+        };
+        (0..=n).any(|k| other.distance_to(s.point_at(len * k as f64 / n as f64)) <= r)
+    })
+}
+
 /// Pocket rings per offset level, outermost level first. Boundaries CCW, island rings CW.
 pub fn pocket_rings(
     boundary: &Contour,
@@ -104,6 +121,27 @@ pub fn pocket_rings(
 ) -> Vec<Vec<Contour>> {
     let mut b = boundary.clone();
     b.set_orientation(Orientation::Ccw);
+    // cavalier mis-offsets coincident edges: islands within r of another wall get a tiny gap first
+    let islands: Vec<Contour> = islands
+        .iter()
+        .enumerate()
+        .flat_map(|(k, isl)| {
+            let near = std::iter::once(boundary)
+                .chain(
+                    islands
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != k)
+                        .map(|(_, o)| o),
+                )
+                .any(|o| comes_within(isl, o, radius));
+            if near {
+                offset_closed(isl, -ISLAND_CLEARANCE)
+            } else {
+                vec![isl.clone()]
+            }
+        })
+        .collect();
     let plines = std::iter::once(to_pline(&b)).chain(islands.iter().map(|i| {
         let mut i = i.clone();
         i.set_orientation(Orientation::Cw);
@@ -182,5 +220,23 @@ mod tests {
         let mut c = circle(3.0);
         c.closed = false;
         assert!(offset_closed(&c, 1.0).is_empty());
+    }
+
+    #[test]
+    fn comes_within_samples_along_segments() {
+        let sq = |x0: f64, x1: f64| {
+            Contour::from_bulge_vertices(
+                &[
+                    (Point::new(x0, 0.0), 0.0),
+                    (Point::new(x1, 0.0), 0.0),
+                    (Point::new(x1, 10.0), 0.0),
+                    (Point::new(x0, 10.0), 0.0),
+                ],
+                true,
+            )
+        };
+        assert!(comes_within(&sq(0.0, 10.0), &sq(10.0, 20.0), 1.0));
+        assert!(comes_within(&sq(0.0, 10.0), &sq(10.9, 20.0), 1.0));
+        assert!(!comes_within(&sq(0.0, 10.0), &sq(11.1, 20.0), 1.0));
     }
 }

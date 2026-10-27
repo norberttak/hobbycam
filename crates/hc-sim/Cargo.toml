@@ -8,3 +8,6 @@ repository.workspace = true
 [dependencies]
 hc-geom = { version = "0.1.0", path = "../hc-geom" }
 hc-toolpath = { version = "0.1.0", path = "../hc-toolpath" }
+
+[dev-dependencies]
+hc-project = { path = "../hc-project" }
