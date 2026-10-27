@@ -112,9 +112,8 @@ fn shot_toolpaths() {
 }
 
 /// M6 test 14. Manual check: 4 markers on straight edges, the selected one orange.
-#[test]
-#[ignore]
-fn shot_tabs() {
+/// The M6 tabs project: an Outside op with 4 auto tabs on the Bracket, tab 2 selected.
+fn tabs_state() -> AppState {
     let mut s = AppState::new(None);
     let mut t1 = state::tests::tool(1);
     t1.diameter = 6.35;
@@ -142,7 +141,13 @@ fn shot_tabs() {
     assert_eq!(pos.len(), 4);
     assert_eq!(note, None);
     s.selected_tab = Some((outer, 1));
+    s
+}
 
+#[test]
+#[ignore]
+fn shot_tabs() {
+    let s = tabs_state();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
@@ -171,6 +176,23 @@ fn shot_issues() {
     }
 }
 
+/// The M9 simulation state: Pocket, through Outside contour and Drill, 60 % into the job.
+fn sim_state() -> AppState {
+    let mut s = toolpaths_state();
+    let inside = s.selected_op.unwrap();
+    s.delete_op(inside);
+    // through cut, so the contour band is darker than the 3 mm pocket; pocket first so both show at 60 %
+    let mut o = s.project.operations[0].clone();
+    o.depth = s.project.stock.thickness;
+    s.update_op(o);
+    let pocket = s.project.operations[1].id;
+    s.move_op(pocket, state::MoveDir::Up);
+    s.sim_view.open = true;
+    s.refresh_toolpaths();
+    s.sim_view.t = 0.6 * s.sim_total();
+    s
+}
+
 /// M9 test 18. Manual check: band as wide as the tool, pocket lighter than the through contour, tool circle at the
 /// readout's position, no tofu, the panel fits at 1280 px.
 #[test]
@@ -180,18 +202,7 @@ fn shot_sim() {
         ("sim", egui::Theme::Dark),
         ("sim_light", egui::Theme::Light),
     ] {
-        let mut s = toolpaths_state();
-        let inside = s.selected_op.unwrap();
-        s.delete_op(inside);
-        // through cut, so the contour band is darker than the 3 mm pocket; pocket first so both show at 60 %
-        let mut o = s.project.operations[0].clone();
-        o.depth = s.project.stock.thickness;
-        s.update_op(o);
-        let pocket = s.project.operations[1].id;
-        s.move_op(pocket, state::MoveDir::Up);
-        s.sim_view.open = true;
-        s.refresh_toolpaths();
-        s.sim_view.t = 0.6 * s.sim_total();
+        let s = sim_state();
         let mut h = Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .with_theme(theme)
@@ -219,19 +230,49 @@ fn screen_of(h: &mut Harness<'_, App>, w: hc_geom::Point) -> egui::Pos2 {
 #[ignore]
 fn shot_snap() {
     for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
+        let names = ["snap", "set_origin", "stock_menu", "draw_preview"]
+            .map(|n| Some(format!("{n}{suffix}")));
+        snap_series(
+            theme,
+            names,
+            bottom_left_corner,
+            crate::snap::SnapKind::Corner,
+        );
+    }
+}
+
+/// The bottom-left `Corner` snap of the Bracket's outer contour.
+fn bottom_left_corner(s: &AppState) -> hc_geom::Point {
+    let edge = state::tests::outer(s);
+    let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
+    s.snap_cache
+        .cands
+        .iter()
+        .filter(|(i, _, _, k)| *i == idx && *k == crate::snap::SnapKind::Corner)
+        .map(|(_, _, p, _)| *p)
+        .min_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
+        .unwrap()
+}
+
+/// Set origin hover over `target(s)` (a `kind` snap), the picked origin, Settings → Stock, a rectangle preview from
+/// that point; each saved under its name if given.
+fn snap_series(
+    theme: egui::Theme,
+    names: [Option<String>; 4],
+    target: fn(&AppState) -> hc_geom::Point,
+    kind: crate::snap::SnapKind,
+) {
+    let shot = |h: &mut Harness<'_, App>, k: usize| {
+        if let Some(n) = &names[k] {
+            save(h, n);
+        }
+    };
+    {
         let mut s = AppState::new(None);
+        no_config_error(&mut s);
         s.open_cli(&state::tests::bracket_path());
         s.set_tool(state::CanvasTool::SetOrigin);
-        let edge = state::tests::outer(&s);
-        let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
-        let corner = s
-            .snap_cache
-            .cands
-            .iter()
-            .filter(|(i, _, _, k)| *i == idx && *k == crate::snap::SnapKind::Corner)
-            .map(|(_, _, p, _)| *p)
-            .min_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
-            .unwrap();
+        let corner = target(&s);
         let mut h = Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .with_theme(theme)
@@ -248,11 +289,11 @@ fn shot_snap() {
                 10.0 / h.state().state.view.zoom as f64,
             )
             .unwrap();
-        assert_eq!(snap.kind, crate::snap::SnapKind::Corner);
+        assert_eq!(snap.kind, kind);
         assert!(h
             .query_by_label("Set origin: click a snap point · Esc cancels")
             .is_some());
-        save(&mut h, &format!("snap{suffix}"));
+        shot(&mut h, 0);
 
         // pick it: the arrows move to the corner
         h.state_mut().state.canvas_click(snap.p, true);
@@ -261,14 +302,14 @@ fn shot_snap() {
             h.state().state.project.stock.origin,
             hc_project::WorkOrigin::Point(corner)
         );
-        save(&mut h, &format!("set_origin{suffix}"));
+        shot(&mut h, 1);
 
         h.get_by_label("Settings").click();
         h.run();
         crate::kittest::menu(&h, "Stock").hover();
         h.run();
         assert!(h.query_by_label("Pick on drawing").is_some());
-        save(&mut h, &format!("stock_menu{suffix}"));
+        shot(&mut h, 2);
         h.key_press(egui::Key::Escape);
         h.run();
 
@@ -281,7 +322,7 @@ fn shot_snap() {
         assert!(h
             .query_by_label("Rectangle: click the opposite corner · Esc cancels")
             .is_some());
-        save(&mut h, &format!("draw_preview{suffix}"));
+        shot(&mut h, 3);
     }
 }
 
@@ -369,22 +410,7 @@ fn shot_snap_kinds() {
 #[ignore]
 fn shot_text() {
     for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
-        let mut s = AppState::new(None);
-        for (text, font, y) in [
-            ("HobbyCAM AB gq 0123", hc_text::Font::Hershey, 20.0),
-            ("HobbyCAM AB gq 0123", hc_text::Font::Outline, 0.0),
-        ] {
-            s.add_shape(state::Shape::Text {
-                at: hc_geom::Point::new(0.0, y),
-                text: text.into(),
-                font,
-                height: 10.0,
-            })
-            .unwrap();
-        }
-        s.clear_selection();
-        s.set_tool(state::CanvasTool::Text);
-        s.fit_pending = true;
+        let s = text_state();
         let mut h = Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .with_theme(theme)
@@ -393,4 +419,154 @@ fn shot_text() {
         assert!(h.query_by_label("Draw text").is_some());
         save(&mut h, &format!("text{suffix}"));
     }
+}
+
+/// Hershey text above Ubuntu Light text, the Text tool active.
+fn text_state() -> AppState {
+    let mut s = AppState::new(None);
+    for (text, font, y) in [
+        ("HobbyCAM AB gq 0123", hc_text::Font::Hershey, 20.0),
+        ("HobbyCAM AB gq 0123", hc_text::Font::Outline, 0.0),
+    ] {
+        s.add_shape(state::Shape::Text {
+            at: hc_geom::Point::new(0.0, y),
+            text: text.into(),
+            font,
+            height: 10.0,
+        })
+        .unwrap();
+    }
+    s.clear_selection();
+    s.set_tool(state::CanvasTool::Text);
+    s.fit_pending = true;
+    s
+}
+
+/// Tests have no config dir; drop that load error so pictures show what a user sees.
+fn no_config_error(s: &mut AppState) {
+    s.library_error = None;
+    s.messages.retain(|m| !m.text.starts_with("Tool library:"));
+}
+
+/// Light-theme harness for the user manual pictures.
+fn docs_harness(mut app: App) -> Harness<'static, App> {
+    no_config_error(&mut app.state);
+    Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_theme(egui::Theme::Light)
+        .build_ui_state(|ui, app: &mut App| app.show(ui), app)
+}
+
+/// M11: the 12 pictures of the user manual.
+/// Run from the repository root: HOBBYCAM_SHOT_DIR=$PWD/docs/src/images cargo test -p hobbycam shot_docs -- --ignored
+#[test]
+#[ignore]
+fn shot_docs() {
+    use state::tests::{bracket_clean, bracket_issues, edit_op};
+    let run = |app: App, name: &str, check: &dyn Fn(&mut Harness<'_, App>)| {
+        let mut h = docs_harness(app);
+        h.run();
+        check(&mut h);
+        save(&mut h, name);
+    };
+
+    // walkthrough steps 2–3: real blank, origin at the Ø76.2 circle's Center
+    let picked = state::tests::walkthrough_stock_origin;
+    let (mut s, _) = bracket_clean();
+    s.selected_op = None;
+    let center = picked(&mut s);
+    run(App::new(s), "main-window", &|h| {
+        assert_eq!(
+            h.state().state.project.stock.origin,
+            hc_project::WorkOrigin::Point(center)
+        );
+        assert_eq!(h.state().state.project.operations.len(), 3);
+        assert!(h.query_by_label("Drill 1 · T2").is_some());
+    });
+
+    let (mut s, _) = bracket_clean();
+    for id in s
+        .project
+        .operations
+        .iter()
+        .map(|o| o.id)
+        .collect::<Vec<_>>()
+    {
+        s.delete_op(id);
+    }
+    s.selection = [state::tests::outer(&s)].into_iter().collect();
+    picked(&mut s);
+    run(App::new(s), "walkthrough-new-op", &|h| {
+        assert!(h.state().state.project.operations.is_empty());
+        assert!(h.query_by_label("New operation").is_some());
+    });
+
+    let (mut s, outside) = bracket_clean();
+    s.select_op(outside);
+    let center = picked(&mut s);
+    run(App::new(s), "walkthrough-toolpaths", &|h| {
+        let st = &h.state().state;
+        assert_eq!(
+            st.project.stock.origin,
+            hc_project::WorkOrigin::Point(center)
+        );
+        assert_eq!(st.toolpaths.iter().filter(|(_, r)| r.is_ok()).count(), 3);
+        assert!(st.issues.is_empty());
+    });
+
+    run(App::new(tabs_state()), "tabs", &|h| {
+        assert!(h.query_by_label("Reset to auto").is_some());
+    });
+
+    run(App::new(bracket_issues().0), "issues", &|h| {
+        assert!(h.query_by_label_contains("Issues (2)").is_some());
+    });
+
+    let (mut s, outside) = bracket_clean();
+    edit_op(&mut s, outside, |o| o.rpm = 0);
+    picked(&mut s);
+    s.refresh_toolpaths();
+    let mut app = App::new(s);
+    app.export_prompt = Some(hc_toolpath::Severity::Warning);
+    run(app, "export-warning", &|h| {
+        assert!(h.query_by_label("Export anyway?").is_some());
+    });
+
+    run(App::new(sim_state()), "simulation", &|h| {
+        assert!(h.query_by_label_contains("Total ").is_some());
+    });
+
+    let (mut s, _) = bracket_clean();
+    no_config_error(&mut s);
+    picked(&mut s);
+    let mut app = App::new(s);
+    app.tool_dialog.open = true;
+    let mut h = docs_harness(app);
+    h.run();
+    assert!(h.query_by_label("Tool library").is_some());
+    // open T1 in the form so every field shows (the first "Edit" is the menu bar's)
+    h.query_all_by_label("Edit")
+        .find(|n| n.rect().min.y > 40.0)
+        .unwrap()
+        .click();
+    h.run();
+    assert!(h.query_by_label("Flute length").is_some());
+    save(&mut h, "tool-library");
+
+    run(App::new(text_state()), "text", &|h| {
+        assert!(h.query_by_label("Draw text").is_some());
+    });
+
+    snap_series(
+        egui::Theme::Light,
+        [
+            Some("set-origin"),
+            None,
+            Some("stock-menu"),
+            Some("drawing"),
+        ]
+        .map(|n| n.map(String::from)),
+        state::tests::pocket_center,
+        crate::snap::SnapKind::Center,
+    );
 }

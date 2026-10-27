@@ -3,3 +3,6 @@
 *.ngc
 /images
 !/tests/fixtures/gcode/*.ngc
+
+# mdBook output
+docs/book/

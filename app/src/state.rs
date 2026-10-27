@@ -620,9 +620,9 @@ impl AppState {
             .unwrap_or_else(|| "untitled".to_string())
     }
 
-    /// The G-code files of the project, or None with an Error message.
-    pub fn gcode(&mut self) -> Option<Vec<GcodeFile>> {
-        match hc_post::export(&self.project, &self.stem()) {
+    /// The G-code files of the project, headers named `name` (the export file name), or None with an Error message.
+    pub fn gcode(&mut self, name: &str) -> Option<Vec<GcodeFile>> {
+        match hc_post::export(&self.project, name) {
             Ok(files) => Some(files),
             Err(e) => {
                 self.msg(Severity::Error, format!("Cannot export G-code: {e}"));
@@ -1518,6 +1518,32 @@ pub(crate) mod tests {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap()
             .0
+    }
+
+    /// Centre of the Bracket's Ø76.2 circle (walkthrough step 3 picks its Center snap).
+    pub fn pocket_center(s: &AppState) -> Point {
+        let id = circles(s, 76.2)[0];
+        match &s.item(id).unwrap().geom {
+            Geom::Contour(c) => c.as_circle().unwrap().center,
+            Geom::Point(_) => unreachable!("a circle"),
+        }
+    }
+
+    /// Walkthrough steps 2–3: the real 220 × 140 mm blank at X 17, Y 19 around the bracket, and the origin at
+    /// the Ø76.2 circle's centre. Returns that centre.
+    pub fn walkthrough_stock_origin(s: &mut AppState) -> Point {
+        let mut st = s.project.stock.clone();
+        (st.min_x, st.min_y, st.width, st.height) = (17.0, 19.0, 220.0, 140.0);
+        let b = match &s.item(outer(s)).unwrap().geom {
+            Geom::Contour(c) => c.bbox(),
+            Geom::Point(_) => unreachable!("a contour"),
+        };
+        assert!(b.min.x > st.min_x && b.min.y > st.min_y);
+        assert!(b.max.x < st.min_x + st.width && b.max.y < st.min_y + st.height);
+        s.set_stock(st);
+        let c = pocket_center(s);
+        s.set_origin(WorkOrigin::Point(c));
+        c
     }
 
     fn op_on(s: &mut AppState, items: Vec<u64>, kind: NewKind, tool: u32) -> u64 {
@@ -2495,7 +2521,7 @@ mod edge_tests {
         };
         s.update_op(o);
         let before = s.messages.len();
-        assert!(s.gcode().is_none());
+        assert!(s.gcode(&s.stem()).is_none());
         assert_eq!(s.messages.len(), before + 1);
         let m = s.messages.last().unwrap();
         assert_eq!(m.severity, Severity::Error);
@@ -2576,13 +2602,23 @@ mod edge_tests {
         s.library.add(tool(1)).unwrap();
         s.selection = [hole].into_iter().collect();
         s.new_operation(NewKind::Drill, 1).unwrap();
-        let files = s.gcode().unwrap();
+        let files = s.gcode(&s.stem()).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].text.starts_with("(untitled - file 1 of 1)\n"));
         s.path = Some(PathBuf::from("/x/My part.hcam"));
-        assert!(s.gcode().unwrap()[0]
+        assert!(s.gcode(&s.stem()).unwrap()[0]
             .text
             .starts_with("(My part - file 1 of 1)\n"));
+    }
+
+    /// M11 R1: the header carries the export file name, also for an unsaved project.
+    #[test]
+    fn m11_header_uses_export_name() {
+        let (mut s, _) = bracket_clean();
+        assert_eq!(s.path, None);
+        let files = s.gcode("bracket").unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files[0].text.starts_with("(bracket - file 1 of"));
     }
 
     #[test]
@@ -2794,7 +2830,7 @@ mod m10_tests {
     fn m10_11_set_origin() {
         let (mut s, _) = bracket_clean();
         s.refresh_toolpaths();
-        let before = s.gcode().unwrap();
+        let before = s.gcode(&s.stem()).unwrap();
         s.dirty = false;
         let edge = outer(&s);
         let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
@@ -2819,7 +2855,7 @@ mod m10_tests {
         assert_eq!(s.tool, CanvasTool::Select);
         s.refresh_toolpaths();
         assert_eq!(s.toolpaths_for.as_ref(), Some(&s.project));
-        let after = s.gcode().unwrap();
+        let after = s.gcode(&s.stem()).unwrap();
         let (x0, x1) = (
             first_word(&before[0].text, "G0 X", 'X'),
             first_word(&after[0].text, "G0 X", 'X'),

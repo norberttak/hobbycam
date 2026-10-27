@@ -2,6 +2,8 @@
 
 mod aci;
 mod canvas;
+#[cfg(test)]
+mod docs_check;
 mod hit;
 mod icons;
 #[cfg(test)]
@@ -195,9 +197,11 @@ impl App {
 
     /// Runs after the check passed or the user confirmed the warnings; the chosen file name is the base of all segment files.
     fn write_export(&mut self) {
-        let Some(files) = self.state.gcode() else {
+        // check before the dialog: "nothing to export" and errors fail without asking for a file
+        let stem = self.state.stem();
+        if self.state.gcode(&stem).is_none() {
             return;
-        };
+        }
         // gcode() succeeded, so the post name is valid
         let Ok(post) = hc_post::post_for(&self.state.project.machine.post) else {
             return;
@@ -210,7 +214,13 @@ impl App {
             dialog = dialog.set_directory(dir);
         }
         if let Some(base) = dialog.save_file() {
-            self.state.write_gcode(&base, &files);
+            // headers carry the chosen file name
+            let name = base
+                .file_stem()
+                .map_or(stem, |n| n.to_string_lossy().into_owned());
+            if let Some(files) = self.state.gcode(&name) {
+                self.state.write_gcode(&base, &files);
+            }
         }
     }
 

@@ -464,7 +464,7 @@ fn deleting_every_item_of_an_op_reports_no_items_and_blocks_export() {
         .issues
         .iter()
         .any(|i| i.rule == RuleId::NoItems && i.op == Some(outside)));
-    assert!(s.gcode().is_none());
+    assert!(s.gcode(&s.stem()).is_none());
     assert!(s
         .messages
         .last()
@@ -628,7 +628,7 @@ fn undo_drops_a_selected_op_that_no_longer_exists_and_refreshes_gcode() {
     let (mut s, _) = bracket_clean();
     s.commit_undo(true);
     s.refresh_toolpaths();
-    let g0 = s.gcode().unwrap();
+    let g0 = s.gcode(&s.stem()).unwrap();
     s.selection = [outer(&s)].into_iter().collect();
     let op = s.new_operation(NewKind::Engrave, 1).unwrap();
     s.set_origin(WorkOrigin::Point(p(3.0, 4.0)));
@@ -638,7 +638,7 @@ fn undo_drops_a_selected_op_that_no_longer_exists_and_refreshes_gcode() {
     assert_eq!(s.selected_op, None);
     s.refresh_toolpaths();
     assert_eq!(s.toolpaths_for.as_ref(), Some(&s.project));
-    let g1 = s.gcode().unwrap();
+    let g1 = s.gcode(&s.stem()).unwrap();
     assert_eq!(
         g0.iter().map(|f| &f.text).collect::<Vec<_>>(),
         g1.iter().map(|f| &f.text).collect::<Vec<_>>()

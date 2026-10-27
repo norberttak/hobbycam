@@ -763,7 +763,7 @@ fn t11_work_origin() {
     pr.stock.height = 100.0;
     assert_eq!(work_origin(&pr), p(50.0, 50.0));
     let files = export(&pr, "x").unwrap();
-    assert!(files[0].text.contains("XY0 = stock centre)\n"));
+    assert!(files[0].text.contains("XY0 = stock center)\n"));
     assert_eq!(code(&files[0].text)[5], "G0 X-50 Y-50 Z5");
 
     // arc I/J do not change with the shift

@@ -96,7 +96,7 @@ impl PostProcessor for LinuxCnc {
         let origin = match job.origin {
             WorkOrigin::DrawingOrigin => "drawing origin".to_string(),
             WorkOrigin::StockBottomLeft => "stock bottom left".to_string(),
-            WorkOrigin::StockCenter => "stock centre".to_string(),
+            WorkOrigin::StockCenter => "stock center".to_string(),
             WorkOrigin::Point(p) => format!("drawing point X{} Y{}", w.num(p.x), w.num(p.y)),
         };
         w.line(&format!(

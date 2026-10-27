@@ -62,6 +62,41 @@ pub enum RuleId {
 }
 
 impl RuleId {
+    /// Every rule, in table order (the docs reference follows it).
+    pub const ALL: [RuleId; 28] = {
+        use RuleId::*;
+        [
+            MissingTool,
+            MissingItem,
+            DuplicateId,
+            DuplicateToolId,
+            IdCounter,
+            InvalidMachine,
+            InvalidStock,
+            InvalidValue,
+            NoItems,
+            OpenContour,
+            UnsupportedItem,
+            ToolTooLarge,
+            DrillBitSideCut,
+            DepthBeyondFlutes,
+            SpindleOff,
+            FeedVsTool,
+            StepoverHigh,
+            ThroughCut,
+            TabsNotThrough,
+            TabTooHigh,
+            TabsReduced,
+            TabsOnOpenContour,
+            NoTabsThroughCut,
+            TabOnCorner,
+            DrillSize,
+            SharedEdge,
+            OutsideStock,
+            PocketUncut,
+        ]
+    };
+
     pub fn severity(self) -> Severity {
         use RuleId::*;
         match self {

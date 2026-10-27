@@ -1,0 +1,12 @@
+[book]
+title = "HobbyCAM User Manual"
+authors = ["Norbert Takacs"]
+language = "en"
+src = "src"
+
+[build]
+create-missing = false   # a SUMMARY entry without a file is a build error, not a silent empty page
+
+[output.html]
+default-theme = "light"
+git-repository-url = "https://github.com/norberttak/hobbycam"

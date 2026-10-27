@@ -919,7 +919,7 @@ fn stock_center_in_inch() {
     // hole (10,30) - (25.4,12.7) = (-15.4, 17.3) mm = (-0.6063, 0.6811) in
     let f = export(&pr, "o").unwrap();
     assert!(f[1].text.contains("\nG0 X-0.6063 Y0.6811 Z0.1969\nG83 X-0.6063 Y0.6811 Z-0.1181 R0.0787 Q0.0394 F7.874\nG80\n"), "{}", f[1].text);
-    assert!(f[0].text.contains("XY0 = stock centre)"));
+    assert!(f[0].text.contains("XY0 = stock center)"));
 }
 
 // ---------------------------------------------------------------- project format v2 → v3

@@ -1,0 +1,64 @@
+# Drawing
+
+Besides importing DXF files you can draw simple shapes. They go on the layer **Drawing**.
+
+## Shapes
+
+Pick a tool in the **Draw** menu or the sidebar. The status bar tells you what to click; `Esc` cancels.
+
+- **Line** (`L`): click the start point, then the end point.
+- **Rectangle** (`R`): click one corner, then the opposite corner.
+- **Circle** (`C`): click the centre, then a point on the circle.
+- **Text** (`T`): click the start of the baseline.
+
+![Drawing a rectangle from a snapped point](images/drawing.png)
+
+Instead of clicking you can type the values in the form on the right (Properties) and click **Add**:
+X1/Y1/X2/Y2 for a line; X, Y (bottom-left corner), Width, Height and **Corner radius** for a rectangle
+(a radius above 0 gives a rounded rectangle); Center X/Y and Diameter for a circle.
+A click on the canvas fills the same fields.
+
+A drawn shape becomes a plain contour, like an imported one. You cannot edit its size later; delete it and draw it again.
+
+## Snaps
+
+While a drawing tool or Set origin is active, the cursor snaps to points within 10 screen pixels.
+A small marker and a label show what it found:
+
+| Label | Marker | Where |
+|---|---|---|
+| End | square | end of an open line or curve |
+| Corner | square | a corner of a contour |
+| Point | diamond | a DXF point (drill point) |
+| Center | circle | centre of a circle or arc |
+| Intersection | X | where two lines or curves cross |
+| Midpoint | triangle | middle of a segment |
+
+On very large drawings the status bar says "Intersection snaps off: drawing too large".
+
+## Changing the selection
+
+Select geometry and use the **Transform** box on the right. Everything works around the centre of the selection:
+
+- **Move X / Move Y** and **Move**
+- **Angle** and **Rotate** (counter-clockwise; also the Rotate button in the sidebar, using the same angle)
+- **Factor** and **Scale** (the same factor in X and Y)
+- **Flip horizontally**, **Flip vertically**
+- **Delete** (also `Del` or Backspace)
+
+## Undo
+
+**Edit → Undo** (`Cmd/Ctrl+Z`) and **Redo** (`Cmd/Ctrl+Shift+Z` or `Ctrl+Y`) remember the last 100 steps.
+A drag or one edit of a field counts as one step.
+
+## Text
+
+![Single-line text (top) and outline text (bottom)](images/text.png)
+
+The Text form has **Text**, **Font**, X, Y and **Height** (the height of a capital letter).
+
+- **Single-line (Hershey)** gives open strokes: cut them with **Engrave**, the tool runs along the lines.
+- **Outline (Ubuntu Light)** gives closed letter outlines: use **Contour** or **Pocket**.
+
+Text is one line, with fixed letter spacing. Characters the font does not have are left out and listed in a
+"Not in the font: …" message.

@@ -149,12 +149,20 @@ Spec: `specs/M10.md`. Two parts, M10a first, each signed off on its own:
   migrate; undo steps, coalescing, depth and dirty state; text produces closed contours (TTF) / open strokes (Hershey).
 
 ### M11 – User documentation
-- mdBook in `docs/`: install, first project walkthrough, operations, tools, tabs, sanity messages, LinuxCNC setup notes. Screenshots from the real app.
+Spec: `specs/M11.md`.
+- mdBook in `docs/` (14 short pages): install, interface, first project walkthrough (sample `bracket.dxf`), drawing, stock & origin,
+  tools, operations, tabs, simulation, sanity message reference (all 28 rules with thresholds), G-code format + LinuxCNC setup
+  (touch-off per file, air cut), shortcuts, known limitations. Docs licence GPL-3.0-or-later.
+- Screenshots: light theme, offscreen kittest (`shot_docs`, ignored test) into `docs/src/images/`, committed.
+- Accuracy guard test (`app/src/docs_check.rs`): every RuleId's message and severity in `sanity.md`, sidebar names/keys in
+  `shortcuts.md`, all links/images/includes exist. Help → User manual opens the Pages URL.
+- mdBook is a dev tool only (`cargo install mdbook`); building and publishing the book in CI is M12.
 
 ### M12 – Release
 - GitHub Actions on tag `v*`: build Windows (.zip) and macOS universal binary (.app in .dmg), sign + notarize with your Developer ID (secrets in GitHub)
 - Mac App Store: app sandbox entitlements (user-selected file read/write), bundle via `cargo-bundle`, signed with the App Store certificate, upload via `xcrun altool`/Transporter, App Store Connect listing
 - Walkthrough doc for both.
+- CI: `mdbook build docs` + deploy to GitHub Pages; complete the Download section of `docs/src/install.md`.
 
 ## Agent workflow
 

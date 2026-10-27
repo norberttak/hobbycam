@@ -14,6 +14,11 @@ Requires [Rust](https://rustup.rs).
 cargo run --release -p hobbycam
 ```
 
+## Documentation
+
+The user manual is in [docs/](docs/) (mdBook: `mdbook serve docs --open`).
+Online: <https://norberttak.github.io/hobbycam/> (published from the first release on).
+
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE).

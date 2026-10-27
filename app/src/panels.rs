@@ -106,6 +106,9 @@ fn item(ui: &mut Ui, text: &str, sc: Option<&KeyboardShortcut>) -> bool {
     ui.add(b).clicked()
 }
 
+/// The published user manual (docs/, deployed to GitHub Pages in M12).
+pub const DOCS_URL: &str = "https://norberttak.github.io/hobbycam/";
+
 pub fn menu(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     egui::Panel::top("menu").show(ui, |ui| {
@@ -168,6 +171,11 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 ui.menu_button("Stock", |ui| stock_menu(app, ui));
                 if ui.button("Tool library…").clicked() {
                     app.tool_dialog.open = true;
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("User manual").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(DOCS_URL));
                 }
             });
         });
@@ -273,10 +281,10 @@ enum SideAct {
     Menu(fn(&mut App, &mut Ui)),
 }
 
-struct SideEntry {
+pub(crate) struct SideEntry {
     glyph: &'static str,
-    name: &'static str,
-    shortcut: Option<String>,
+    pub(crate) name: &'static str,
+    pub(crate) shortcut: Option<String>,
     enabled: bool,
     selected: Option<bool>,
     act: SideAct,
@@ -298,7 +306,7 @@ fn entry(
     }
 }
 
-/// Left icon bar, two columns: every menu action except Save as… and Quit, plus Delete / Rotate / Flip of the selection.
+/// Left icon bar, two columns: every menu action except Save as…, Quit and Help, plus Delete / Rotate / Flip of the selection.
 pub fn sidebar(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     egui::Panel::left("sidebar")
@@ -310,7 +318,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         });
 }
 
-fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntry>> {
+pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntry>> {
     let sc = |s: &KeyboardShortcut| Some(ctx.format_shortcut(s));
     let key = |k: &str| Some(k.to_string());
     let s = &app.state;

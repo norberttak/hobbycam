@@ -96,16 +96,17 @@ fn body(app: &mut App, ui: &mut egui::Ui) {
     ui.separator();
     let mut done = None;
     egui::Grid::new("tool_form").num_columns(2).show(ui, |ui| {
-        ui.label("Number");
+        let l = ui.label("Number");
         ui.add_enabled(
             *is_new,
             egui::DragValue::new(&mut t.id).range(1..=9999).prefix("T"),
-        );
+        )
+        .labelled_by(l.id);
         ui.end_row();
-        ui.label("Name");
-        ui.text_edit_singleline(&mut t.name);
+        let l = ui.label("Name");
+        ui.text_edit_singleline(&mut t.name).labelled_by(l.id);
         ui.end_row();
-        ui.label("Type");
+        let l = ui.label("Type");
         egui::ComboBox::from_id_salt("tool_kind")
             .selected_text(kind_name(&t.kind))
             .show_ui(ui, |ui| {
@@ -120,47 +121,53 @@ fn body(app: &mut App, ui: &mut egui::Ui) {
                         t.kind = k;
                     }
                 }
-            });
+            })
+            .response
+            .labelled_by(l.id);
         ui.end_row();
         if let ToolKind::VBit { angle_deg } = &mut t.kind {
-            ui.label("V angle");
+            let l = ui.label("V angle");
             ui.add(
                 egui::DragValue::new(angle_deg)
                     .range(1.0..=179.0)
                     .suffix("°"),
-            );
+            )
+            .labelled_by(l.id);
             ui.end_row();
         }
-        ui.label("Diameter");
-        length_field(ui, &mut t.diameter, units, Quantity::Length);
+        let l = ui.label("Diameter");
+        length_field(ui, &mut t.diameter, units, Quantity::Length).labelled_by(l.id);
         ui.end_row();
-        ui.label("Flute length");
-        length_field(ui, &mut t.flute_length, units, Quantity::Length);
+        let l = ui.label("Flute length");
+        length_field(ui, &mut t.flute_length, units, Quantity::Length).labelled_by(l.id);
         ui.end_row();
-        ui.label("Flutes");
-        ui.add(egui::DragValue::new(&mut t.flutes).range(1..=12));
+        let l = ui.label("Flutes");
+        ui.add(egui::DragValue::new(&mut t.flutes).range(1..=12))
+            .labelled_by(l.id);
         ui.end_row();
-        ui.label("Feed");
-        length_field(ui, &mut t.feed, units, Quantity::Feed);
+        let l = ui.label("Feed");
+        length_field(ui, &mut t.feed, units, Quantity::Feed).labelled_by(l.id);
         ui.end_row();
-        ui.label("Plunge feed");
-        length_field(ui, &mut t.plunge_feed, units, Quantity::Feed);
+        let l = ui.label("Plunge feed");
+        length_field(ui, &mut t.plunge_feed, units, Quantity::Feed).labelled_by(l.id);
         ui.end_row();
-        ui.label("RPM");
-        ui.add(egui::DragValue::new(&mut t.rpm).range(0..=100_000));
+        let l = ui.label("RPM");
+        ui.add(egui::DragValue::new(&mut t.rpm).range(0..=100_000))
+            .labelled_by(l.id);
         ui.end_row();
-        ui.label("Depth/pass");
-        length_field(ui, &mut t.depth_per_pass, units, Quantity::Length);
+        let l = ui.label("Depth/pass");
+        length_field(ui, &mut t.depth_per_pass, units, Quantity::Length).labelled_by(l.id);
         ui.end_row();
-        ui.label("Stepover");
+        let l = ui.label("Stepover");
         ui.add(
             egui::DragValue::new(&mut t.stepover_pct)
                 .range(1.0..=100.0)
                 .suffix(" %"),
-        );
+        )
+        .labelled_by(l.id);
         ui.end_row();
-        ui.label("Comment");
-        ui.text_edit_singleline(&mut t.comment);
+        let l = ui.label("Comment");
+        ui.text_edit_singleline(&mut t.comment).labelled_by(l.id);
         ui.end_row();
     });
     ui.horizontal(|ui| {
