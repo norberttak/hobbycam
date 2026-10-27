@@ -12,7 +12,7 @@ The program shall be multi platform (at least Windows and Mac) and I want to mak
 7. No need to create automatic tool path selection. It's totaly OK, to select the elements (lines, areas) on the imported/created drawings and select the required operation (engrave, mill, drill) with the neccesary parameters (tool index, final depth, linear speed, tool rpm, depth increment)
 8. A basic sanity check shall be implemented to catch the wrong tool path creation 
 9. The program is definitely for hobby purposes only. Ignore every professional features.
-10. I added a few images (images folder) from estlCAM program taht can be a good base model for my application. Please be sure not to clone the application as I want to avoid any legal issues
+10. I added a few images (images folder) from another hobby-level CAM program that can be a good base model for my application. Please be sure not to clone the application as I want to avoid any legal issues
 11. The application shall be self contained. Now extra libraries shall be installed on the user's machine. Rust language seems to be ideal for the project.
 12. A basic simulation of tool moving shall be implemented as well
 13. I need unit tests

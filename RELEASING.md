@@ -18,7 +18,7 @@ Overview of what the automation does:
 
 ## 1. Create the GitHub repository (once)
 
-1. Make sure the estlCAM screenshots and your scratch drawings are not in git. This must print nothing:
+1. Make sure the reference screenshots of other hobby-level CAM software and your scratch drawings are not in git. This must print nothing:
 
    ```sh
    git ls-files images drawings
