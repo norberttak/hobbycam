@@ -134,7 +134,7 @@ impl Segment {
             Segment::Line { start, end } => {
                 let d = end - start;
                 let len2 = d.dot(d);
-                if len2 < EPS {
+                if len2 < EPS * EPS {
                     return 0.0;
                 }
                 ((p - start).dot(d) / len2).clamp(0.0, 1.0) * len2.sqrt()
@@ -163,6 +163,39 @@ impl Segment {
                 }
             }
         }
+    }
+
+    /// Points where the two segments cross or touch, including at their ends. Empty for parallel or collinear lines and for
+    /// concentric arcs. Tangency gives one point (|d − r| ≤ EPS, or |d − (r1 ± r2)| ≤ EPS). Arc points must lie on the arc span
+    /// (angle within the sweep, inclusive, tolerance EPS / radius). No duplicates (≤ EPS). Order unspecified.
+    pub fn intersections(&self, other: &Segment) -> Vec<Point> {
+        let raw = match (*self, *other) {
+            (Segment::Line { start: a, end: b }, Segment::Line { start: c, end: d }) => {
+                line_line(a, b, c, d)
+            }
+            (Segment::Line { start, end }, arc @ Segment::Arc { .. })
+            | (arc @ Segment::Arc { .. }, Segment::Line { start, end }) => {
+                let (center, radius) = arc_circle(&arc);
+                line_circle(start, end, center, radius)
+                    .into_iter()
+                    .filter(|&q| on_arc(&arc, q))
+                    .collect()
+            }
+            (Segment::Arc { .. }, Segment::Arc { .. }) => {
+                let ((c1, r1), (c2, r2)) = (arc_circle(self), arc_circle(other));
+                circle_circle(c1, r1, c2, r2)
+                    .into_iter()
+                    .filter(|&q| on_arc(self, q) && on_arc(other, q))
+                    .collect()
+            }
+        };
+        let mut out: Vec<Point> = Vec::with_capacity(raw.len());
+        for q in raw {
+            if !out.iter().any(|o| o.distance(q) <= EPS) {
+                out.push(q);
+            }
+        }
+        out
     }
 
     /// The point halfway along the segment.
@@ -270,6 +303,103 @@ impl Segment {
             sweep: 4.0 * bulge.atan(),
         }
     }
+}
+
+fn arc_circle(s: &Segment) -> (Point, f64) {
+    match *s {
+        Segment::Arc { center, radius, .. } => (center, radius),
+        Segment::Line { start, .. } => (start, 0.0),
+    }
+}
+
+/// True when `q` (on the arc's circle) lies within the sweep, ends inclusive (tolerance EPS / radius).
+fn on_arc(s: &Segment, q: Point) -> bool {
+    let Segment::Arc {
+        center,
+        radius,
+        start_angle,
+        sweep,
+    } = *s
+    else {
+        return true;
+    };
+    if sweep.abs() >= TAU - EPS {
+        return true;
+    }
+    let tol = EPS / radius.max(EPS);
+    let t = (q.y - center.y).atan2(q.x - center.x);
+    let off = if sweep > 0.0 {
+        (t - start_angle).rem_euclid(TAU)
+    } else {
+        (start_angle - t).rem_euclid(TAU)
+    };
+    off <= sweep.abs() + tol || off >= TAU - tol
+}
+
+/// Segment ab × segment cd; none when parallel or collinear.
+fn line_line(a: Point, b: Point, c: Point, d: Point) -> Vec<Point> {
+    let (r, s) = (b - a, d - c);
+    let (lr, ls) = (r.length(), s.length());
+    let den = r.cross(s);
+    if lr < EPS || ls < EPS || den.abs() <= EPS * lr * ls {
+        return Vec::new();
+    }
+    let t = (c - a).cross(s) / den;
+    let u = (c - a).cross(r) / den;
+    let (tr, ts) = (EPS / lr, EPS / ls);
+    if t < -tr || t > 1.0 + tr || u < -ts || u > 1.0 + ts {
+        return Vec::new();
+    }
+    vec![a + r * t.clamp(0.0, 1.0)]
+}
+
+/// Segment ab × circle; tangency (|h − r| ≤ EPS) gives the foot point.
+fn line_circle(a: Point, b: Point, c: Point, r: f64) -> Vec<Point> {
+    let d = b - a;
+    let len = d.length();
+    if len < EPS {
+        return Vec::new();
+    }
+    let u = d * (1.0 / len);
+    let along = (c - a).dot(u);
+    let foot = a + u * along;
+    let h = foot.distance(c);
+    let ts: Vec<f64> = if (h - r).abs() <= EPS {
+        vec![along]
+    } else if h > r {
+        Vec::new()
+    } else {
+        let k = (r * r - h * h).sqrt();
+        vec![along - k, along + k]
+    };
+    ts.into_iter()
+        .filter(|&t| t >= -EPS && t <= len + EPS)
+        .map(|t| a + u * t)
+        .collect()
+}
+
+/// Circle × circle; none when concentric; tangency gives one point.
+fn circle_circle(c1: Point, r1: f64, c2: Point, r2: f64) -> Vec<Point> {
+    let d = c1.distance(c2);
+    if d <= EPS {
+        return Vec::new();
+    }
+    let u = (c2 - c1) * (1.0 / d);
+    if (d - (r1 + r2)).abs() <= EPS {
+        return vec![c1 + u * r1];
+    }
+    if (d - (r1 - r2).abs()).abs() <= EPS {
+        // internal tangency: the touch point lies on the far side of the smaller circle, seen from the larger centre
+        return vec![if r1 >= r2 { c1 + u * r1 } else { c1 - u * r1 }];
+    }
+    if d > r1 + r2 || d < (r1 - r2).abs() {
+        return Vec::new();
+    }
+    let a = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+    let h = (r1 * r1 - a * a).max(0.0).sqrt();
+    let base = c1 + u * a;
+    let n = Point::new(-u.y, u.x);
+    vec![base + n * h, base - n * h]
 }
 
 /// Full circle.
@@ -572,5 +702,92 @@ mod tests {
         .to_contour()
         .segments[0];
         assert!((full.closest(p(0.0, -5.0)) - 3.0 * PI).abs() < T);
+    }
+
+    // ------------------------------------------------------------ M10a.2 intersections
+
+    fn line(x0: f64, y0: f64, x1: f64, y1: f64) -> Segment {
+        Segment::Line {
+            start: p(x0, y0),
+            end: p(x1, y1),
+        }
+    }
+
+    fn arc(cx: f64, cy: f64, r: f64, start: f64, sweep: f64) -> Segment {
+        Segment::Arc {
+            center: p(cx, cy),
+            radius: r,
+            start_angle: start,
+            sweep,
+        }
+    }
+
+    fn full(cx: f64, cy: f64, r: f64) -> Segment {
+        arc(cx, cy, r, 0.0, TAU)
+    }
+
+    /// Same point set both ways round (test 5), within T.
+    fn check(a: Segment, b: Segment, want: &[(f64, f64)]) {
+        for (x, y) in [(a, b), (b, a)] {
+            let got = x.intersections(&y);
+            assert_eq!(got.len(), want.len(), "{x:?} x {y:?}: {got:?}");
+            for &(wx, wy) in want {
+                assert!(
+                    got.iter().any(|g| g.approx_eq(p(wx, wy), T)),
+                    "{x:?} x {y:?}: {got:?} lacks ({wx}, {wy})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn m10a2_01_line_line() {
+        check(
+            line(0.0, 0.0, 10.0, 10.0),
+            line(0.0, 10.0, 10.0, 0.0),
+            &[(5.0, 5.0)],
+        );
+        check(
+            line(0.0, 0.0, 5.0, 0.0),
+            line(5.0, 0.0, 5.0, 5.0),
+            &[(5.0, 0.0)],
+        );
+        check(line(0.0, 0.0, 1.0, 0.0), line(5.0, -1.0, 5.0, 1.0), &[]);
+        check(line(0.0, 0.0, 10.0, 0.0), line(0.0, 1.0, 10.0, 1.0), &[]);
+        check(line(0.0, 0.0, 10.0, 0.0), line(5.0, 0.0, 15.0, 0.0), &[]);
+    }
+
+    #[test]
+    fn m10a2_02_line_circle() {
+        let c = full(0.0, 0.0, 5.0);
+        check(line(-10.0, 0.0, 10.0, 0.0), c, &[(-5.0, 0.0), (5.0, 0.0)]);
+        check(line(-10.0, 5.0, 10.0, 5.0), c, &[(0.0, 5.0)]);
+        check(line(-10.0, 6.0, 10.0, 6.0), c, &[]);
+        check(line(0.0, 0.0, 10.0, 0.0), c, &[(5.0, 0.0)]);
+    }
+
+    #[test]
+    fn m10a2_03_line_arc_span() {
+        let q = arc(0.0, 0.0, 5.0, 0.0, FRAC_PI_2);
+        check(line(-10.0, -1.0, 10.0, -1.0), q, &[]);
+        check(line(3.0, -10.0, 3.0, 10.0), q, &[(3.0, 4.0)]);
+        // CW arc over the same quarter
+        let cw = arc(0.0, 0.0, 5.0, FRAC_PI_2, -FRAC_PI_2);
+        check(line(3.0, -10.0, 3.0, 10.0), cw, &[(3.0, 4.0)]);
+    }
+
+    #[test]
+    fn m10a2_04_circle_circle() {
+        let a = full(0.0, 0.0, 5.0);
+        check(a, full(8.0, 0.0, 5.0), &[(4.0, 3.0), (4.0, -3.0)]);
+        check(a, full(10.0, 0.0, 5.0), &[(5.0, 0.0)]);
+        check(a, full(3.0, 0.0, 2.0), &[(5.0, 0.0)]);
+        check(a, full(0.0, 0.0, 3.0), &[]);
+        check(a, a, &[]);
+        check(
+            arc(0.0, 0.0, 5.0, 0.0, PI),
+            full(8.0, 0.0, 5.0),
+            &[(4.0, 3.0)],
+        );
     }
 }

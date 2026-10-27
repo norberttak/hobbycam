@@ -1,7 +1,7 @@
 //! Application state and every project edit. No egui UI code here.
 
 use crate::hit;
-use crate::snap::{self, Snap, SnapKind};
+use crate::snap::{self, Snap, SnapCache};
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::{shapes, BBox, Contour, Point, Transform, EPS};
@@ -129,7 +129,7 @@ impl CanvasTool {
     pub fn hint(self, pending: bool) -> Option<&'static str> {
         Some(match (self, pending) {
             (CanvasTool::Select, _) => return None,
-            (CanvasTool::SetOrigin, _) => "Set origin: click a corner, end or center",
+            (CanvasTool::SetOrigin, _) => "Set origin: click a snap point",
             (CanvasTool::Line, false) => "Line: click the start point",
             (CanvasTool::Line, true) => "Line: click the end point",
             (CanvasTool::Rect, false) => "Rectangle: click a corner",
@@ -259,7 +259,7 @@ pub struct AppState {
     /// First click of a two-click drawing tool.
     pub pending: Option<Point>,
     /// (item index, point, kind), rebuilt in `items_changed`.
-    pub snap_cache: Vec<(usize, Point, SnapKind)>,
+    pub snap_cache: SnapCache,
     pub undo: Vec<Project>,
     pub redo: Vec<Project>,
     /// The last committed state.
@@ -310,7 +310,7 @@ impl AppState {
             draw: DrawForm::default(),
             xform: XformForm::default(),
             pending: None,
-            snap_cache: Vec::new(),
+            snap_cache: SnapCache::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             undo_base: Project::new(),
@@ -383,7 +383,7 @@ impl AppState {
         format!("HobbyCAM – {name}{}", if self.dirty { " *" } else { "" })
     }
 
-    fn items_changed(&mut self) {
+    pub(crate) fn items_changed(&mut self) {
         self.item_bbox = self.project.items.iter().map(hit::item_bbox).collect();
         self.snap_cache = snap::build_cache(&self.project.items);
         let ids: HashSet<u64> = self.project.items.iter().map(|i| i.id).collect();
@@ -751,7 +751,7 @@ impl AppState {
 
     pub fn snap_at(&self, p: Point, radius: f64) -> Option<Snap> {
         snap::nearest(
-            &self.snap_cache,
+            &self.snap_cache.cands,
             &self.project.items,
             |i| self.is_visible(i),
             p,
@@ -847,6 +847,23 @@ impl AppState {
         self.project.transform_items(&ids, t);
         self.items_changed();
         self.dirty = true;
+    }
+
+    /// Rotate by the form angle about the selection centre (Transform button and sidebar).
+    pub fn rotate_selection(&mut self) {
+        let t = Transform::rotate(self.xform.angle_deg.to_radians(), self.selection_center());
+        self.transform_selection(&t);
+    }
+
+    /// Flip about the selection centre: horizontally = mirror across the vertical centre line.
+    pub fn flip_selection(&mut self, horizontal: bool) {
+        let c = self.selection_center();
+        let t = if horizontal {
+            Transform::mirror_y(c.x)
+        } else {
+            Transform::mirror_x(c.y)
+        };
+        self.transform_selection(&t);
     }
 
     /// Removes the selected items and their op references / manual tabs.
@@ -2654,6 +2671,7 @@ mod edge_tests {
 mod m10_tests {
     use super::tests::{bracket_clean, bracket_path, edit_op, outer, scratch, tool};
     use super::*;
+    use crate::snap::SnapKind;
 
     const T: f64 = 1e-9;
 
@@ -2698,10 +2716,11 @@ mod m10_tests {
         let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
         let corner = s
             .snap_cache
+            .cands
             .iter()
-            .find(|(i, _, k)| *i == idx && *k == SnapKind::Corner)
+            .find(|(i, _, _, k)| *i == idx && *k == SnapKind::Corner)
             .unwrap()
-            .1;
+            .2;
 
         // no snap: nothing happens, the tool stays
         s.set_tool(CanvasTool::SetOrigin);
@@ -2894,8 +2913,9 @@ mod m10_tests {
         assert_eq!(s.item_bbox.len(), s.project.items.len());
         assert!(s
             .snap_cache
+            .cands
             .iter()
-            .all(|(i, _, _)| *i < s.project.items.len()));
+            .all(|(i, j, _, _)| *i < s.project.items.len() && *j < s.project.items.len()));
     }
 
     #[test]

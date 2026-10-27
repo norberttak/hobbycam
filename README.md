@@ -17,3 +17,8 @@ cargo run --release -p hobbycam
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE).
+
+## Third-party fonts
+
+- Phosphor Icons (regular, `@phosphor-icons/web` 2.1.2), MIT License, Copyright (c) 2020-2021 Phosphor Icons.
+  See [app/assets/PHOSPHOR-LICENSE.txt](app/assets/PHOSPHOR-LICENSE.txt).

@@ -102,7 +102,7 @@ fn shot_toolpaths() {
     save(&mut h, "toolpaths");
     h.get_by_label("View").click();
     h.run();
-    h.get_by_label("Show toolpaths").click();
+    crate::kittest::menu(&h, "Show toolpaths").click();
     h.run();
     assert!(!h.state().state.show_toolpaths);
     // close the menu so the canvas is unobstructed
@@ -226,9 +226,10 @@ fn shot_snap() {
         let idx = s.project.items.iter().position(|i| i.id == edge).unwrap();
         let corner = s
             .snap_cache
+            .cands
             .iter()
-            .filter(|(i, _, k)| *i == idx && *k == crate::snap::SnapKind::Corner)
-            .map(|(_, p, _)| *p)
+            .filter(|(i, _, _, k)| *i == idx && *k == crate::snap::SnapKind::Corner)
+            .map(|(_, _, p, _)| *p)
             .min_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
             .unwrap();
         let mut h = Harness::builder()
@@ -249,7 +250,7 @@ fn shot_snap() {
             .unwrap();
         assert_eq!(snap.kind, crate::snap::SnapKind::Corner);
         assert!(h
-            .query_by_label("Set origin: click a corner, end or center · Esc cancels")
+            .query_by_label("Set origin: click a snap point · Esc cancels")
             .is_some());
         save(&mut h, &format!("snap{suffix}"));
 
@@ -264,7 +265,7 @@ fn shot_snap() {
 
         h.get_by_label("Settings").click();
         h.run();
-        h.get_by_label("Stock").hover();
+        crate::kittest::menu(&h, "Stock").hover();
         h.run();
         assert!(h.query_by_label("Pick on drawing").is_some());
         save(&mut h, &format!("stock_menu{suffix}"));
@@ -281,5 +282,84 @@ fn shot_snap() {
             .query_by_label("Rectangle: click the opposite corner · Esc cancels")
             .is_some());
         save(&mut h, &format!("draw_preview{suffix}"));
+    }
+}
+
+/// The Bracket saved and re-opened, so the undo history is empty (Undo disabled).
+fn clean_bracket(name: &str) -> AppState {
+    let path = state::tests::scratch(name).join("bracket.hcam");
+    let mut s = AppState::new(None);
+    s.open_cli(&state::tests::bracket_path());
+    assert!(s.save_as(&path));
+    let mut s = AppState::new(None);
+    assert!(s.open(&path));
+    s
+}
+
+/// M10a.2 test 15. Manual check: icons crisp and legible in both themes, the selected tool clearly highlighted,
+/// disabled buttons greyed, tooltip readable.
+#[test]
+#[ignore]
+fn shot_sidebar() {
+    for (name, theme) in [
+        ("sidebar_dark", egui::Theme::Dark),
+        ("sidebar_light", egui::Theme::Light),
+    ] {
+        let mut s = clean_bracket(name);
+        let edge = state::tests::outer(&s);
+        s.selection = [edge].into_iter().collect();
+        s.set_tool(state::CanvasTool::Line);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        assert!(!h.state().state.can_undo());
+        crate::kittest::side(&h, "Line").hover();
+        for _ in 0..60 {
+            h.step(); // tooltip delay
+        }
+        h.run();
+        save(&mut h, name);
+    }
+}
+
+/// M10a.2 test 15: one hover per new marker (Center circle, Intersection X, Midpoint triangle).
+#[test]
+#[ignore]
+fn shot_snap_kinds() {
+    use crate::snap::SnapKind;
+    for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
+        let mut s = clean_bracket(&format!("snap_kinds{suffix}"));
+        s.set_tool(state::CanvasTool::Line);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        for kind in [SnapKind::Center, SnapKind::Intersection, SnapKind::Midpoint] {
+            let st = &h.state().state;
+            let at = st
+                .snap_cache
+                .cands
+                .iter()
+                .filter(|c| c.3 == kind)
+                .map(|c| c.2)
+                .find(|&q| st.snap_at(q, 1e-6).map(|sn| sn.kind) == Some(kind))
+                .unwrap();
+            let pos = screen_of(&mut h, at) + egui::vec2(2.0, 1.0);
+            h.hover_at(pos);
+            h.run();
+            let st = &h.state().state;
+            let r = 10.0 / st.view.zoom as f64;
+            assert_eq!(
+                st.snap_at(st.cursor.unwrap(), r).map(|s| s.kind),
+                Some(kind)
+            );
+            save(
+                &mut h,
+                &format!("snap_{}{suffix}", kind.label().to_lowercase()),
+            );
+        }
     }
 }

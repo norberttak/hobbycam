@@ -145,7 +145,7 @@ fn snap_cache_follows_transform_delete_undo_and_import() {
     s.delete_selection();
     s.commit_undo(true);
     assert!(s.snap_at(p(100.0, 0.0), 0.5).is_none());
-    assert!(s.snap_cache.is_empty());
+    assert!(s.snap_cache.cands.is_empty()); // M10a.2: SnapCache
     s.undo();
     assert_eq!(s.snap_at(p(100.0, 0.0), 0.5).unwrap().item, id);
     s.undo();
@@ -843,15 +843,19 @@ mod ui {
         h.run();
         h.get_by_label("Edit").click();
         h.run();
-        assert!(h.get_by_label("Undo").accesskit_node().is_disabled());
+        assert!(crate::kittest::menu(&h, "Undo")
+            .accesskit_node()
+            .is_disabled());
         h.key_press(egui::Key::Escape);
         h.run();
         h.state_mut().state.set_origin(WorkOrigin::StockCenter);
         h.run();
         h.get_by_label("Edit").click();
         h.run();
-        assert!(!h.get_by_label("Undo").accesskit_node().is_disabled());
-        h.get_by_label("Undo").click();
+        assert!(!crate::kittest::menu(&h, "Undo")
+            .accesskit_node()
+            .is_disabled());
+        crate::kittest::menu(&h, "Undo").click();
         h.run();
         assert_eq!(
             h.state().state.project.stock.origin,

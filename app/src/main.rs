@@ -3,8 +3,11 @@
 mod aci;
 mod canvas;
 mod hit;
+mod icons;
 #[cfg(test)]
 mod m10_verify;
+#[cfg(test)]
+mod m10a2_verify;
 mod panels;
 #[cfg(test)]
 mod shot;
@@ -57,6 +60,8 @@ pub struct App {
     pub tab_drag: bool,
     /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
     pub export_prompt: Option<hc_toolpath::Severity>,
+    /// The icon font is installed (once, on the first frame).
+    fonts_ready: bool,
 }
 
 impl App {
@@ -71,12 +76,17 @@ impl App {
             box_start: None,
             tab_drag: false,
             export_prompt: None,
+            fonts_ready: false,
         }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.state.refresh_toolpaths();
         let ctx = ui.ctx().clone();
+        if !self.fonts_ready {
+            icons::install(&ctx);
+            self.fonts_ready = true;
+        }
         if self.state.sim_view.playing {
             self.state.advance(ui.input(|i| i.stable_dt) as f64);
             ctx.request_repaint();
@@ -96,6 +106,7 @@ impl App {
         panels::status_bar(self, ui);
         panels::sim_panel(self, ui);
         panels::issues(self, ui);
+        panels::sidebar(self, ui);
         panels::left(self, ui);
         panels::right(self, ui);
         egui::CentralPanel::default()
@@ -287,6 +298,39 @@ mod kittest {
     use egui_kittest::kittest::Queryable;
     use egui_kittest::Harness;
 
+    /// Sidebar buttons are the 40 px squares of the two left columns (menu popups can open over the sidebar).
+    fn in_sidebar(n: &egui_kittest::Node<'_>) -> bool {
+        let r = n.rect();
+        r.min.x < 110.0 && r.height() >= 36.0 && r.width() <= 44.0
+    }
+
+    /// The node named (or containing) `name` outside the sidebar; menus and the sidebar share names.
+    pub(crate) fn menu_q<'a>(
+        h: &'a Harness<'_, App>,
+        name: &'a str,
+        contains: bool,
+    ) -> Option<egui_kittest::Node<'a>> {
+        let mut v: Vec<_> = if contains {
+            h.query_all_by_label_contains(name).collect()
+        } else {
+            h.query_all_by_label(name).collect()
+        };
+        v.retain(|n| !in_sidebar(n));
+        assert!(v.len() <= 1, "{name}: {} nodes", v.len());
+        v.pop()
+    }
+
+    pub(crate) fn menu<'a>(h: &'a Harness<'_, App>, name: &'a str) -> egui_kittest::Node<'a> {
+        menu_q(h, name, false).unwrap_or_else(|| panic!("no node {name}"))
+    }
+
+    /// The sidebar button named `name`.
+    pub(crate) fn side<'a>(h: &'a Harness<'_, App>, name: &'a str) -> egui_kittest::Node<'a> {
+        let mut v: Vec<_> = h.query_all_by_label(name).filter(in_sidebar).collect();
+        assert_eq!(v.len(), 1, "sidebar {name}");
+        v.pop().unwrap()
+    }
+
     fn harness() -> Harness<'static, App> {
         let mut s = AppState::new(None);
         s.open_cli(&state::tests::bracket_path());
@@ -308,7 +352,7 @@ mod kittest {
     fn k1_layer_labels() {
         let h = harness();
         for name in ["Outline", "Center", "Hidden", "Title"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
     }
 
@@ -325,7 +369,7 @@ mod kittest {
         let mut h = harness();
         h.get_by_label("File").click();
         h.run();
-        assert!(h.query_by_label_contains("Import DXF…").is_some());
+        assert!(menu_q(&h, "Import DXF…", true).is_some());
     }
 
     #[test]
@@ -333,15 +377,15 @@ mod kittest {
         let mut h = harness();
         h.get_by_label("File").click();
         h.run();
-        assert!(h.query_by_label_contains("Export G-code…").is_some());
+        assert!(menu_q(&h, "Export G-code…", true).is_some());
         h.key_press(egui::Key::Escape);
         h.run();
         h.get_by_label("Settings").click();
         h.run();
-        h.get_by_label("Machine").hover();
+        menu(&h, "Machine").hover();
         h.run();
         for name in ["Safe Z", "Clearance Z", "Tool change Z"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
     }
 
@@ -418,13 +462,13 @@ mod kittest {
         assert!(h.query_by_label("Play").is_none());
         h.get_by_label("View").click();
         h.run();
-        h.get_by_label("Simulation").click();
+        menu(&h, "Simulation").click();
         h.run();
         assert!(h.state().state.sim_view.open);
         h.key_press(egui::Key::Escape);
         h.run();
         for name in ["Play", "Restart", "Speed"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         // the slider and its value field are both named "Time"
         assert_eq!(h.query_all_by_label("Time").count(), 2);
@@ -442,7 +486,7 @@ mod kittest {
         h.run_steps(2);
         h.get_by_label("View").click();
         h.run_steps(2);
-        h.get_by_label("Simulation").click();
+        menu(&h, "Simulation").click();
         h.run_steps(2);
         assert!(!h.state().state.sim_view.open);
         assert!(!h.state().state.sim_view.playing);
@@ -487,7 +531,7 @@ mod kittest {
 
     fn disabled(h: &Harness<'static, App>, label: &str) -> bool {
         use egui_kittest::kittest::NodeT;
-        h.get_by_label(label).accesskit_node().is_disabled()
+        menu(h, label).accesskit_node().is_disabled()
     }
 
     fn open_menu(h: &mut Harness<'static, App>, name: &str) {
@@ -510,7 +554,7 @@ mod kittest {
         close_menu(&mut h);
 
         open_menu(&mut h, "Draw");
-        h.get_by_label("Rectangle").click();
+        menu(&h, "Rectangle").click();
         h.run();
         h.get_by_label("Add").click();
         h.run();
@@ -551,13 +595,13 @@ mod kittest {
         h.run();
         open_menu(&mut h, "Draw");
         for name in ["Select", "Line", "Rectangle", "Circle", "Set origin"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
-        h.get_by_label("Set origin").click();
+        menu(&h, "Set origin").click();
         h.run();
         assert_eq!(h.state().state.tool, state::CanvasTool::SetOrigin);
         assert!(h
-            .query_by_label("Set origin: click a corner, end or center · Esc cancels")
+            .query_by_label("Set origin: click a snap point · Esc cancels")
             .is_some());
         h.hover_at(egui::pos2(640.0, 400.0)); // the canvas
         h.run();
@@ -567,10 +611,10 @@ mod kittest {
 
         // Line form
         open_menu(&mut h, "Draw");
-        h.get_by_label("Line").click();
+        menu(&h, "Line").click();
         h.run();
         for name in ["X1", "Y1", "X2", "Y2", "Add"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         h.get_by_label("X2").set_value_accesskit(12.0);
         h.run();
@@ -584,7 +628,7 @@ mod kittest {
 
         // one item selected: transform group
         open_menu(&mut h, "Draw");
-        h.get_by_label("Select").click();
+        menu(&h, "Select").click();
         h.run();
         for name in [
             "Move",
@@ -594,7 +638,7 @@ mod kittest {
             "Flip vertically",
             "Delete",
         ] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         h.get_by_label("Delete").click();
         h.run();
@@ -602,10 +646,10 @@ mod kittest {
 
         // Settings > Stock
         open_menu(&mut h, "Settings");
-        h.get_by_label("Stock").hover();
+        menu(&h, "Stock").hover();
         h.run();
         for name in ["Thickness", "Picked point", "Pick on drawing"] {
-            assert!(h.query_by_label(name).is_some(), "{name}");
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         h.get_by_label("Stock center").click();
         h.run();
@@ -613,5 +657,204 @@ mod kittest {
             h.state().state.project.stock.origin,
             hc_project::WorkOrigin::StockCenter
         );
+    }
+
+    fn toggled(n: &egui_kittest::Node<'_>) -> bool {
+        use egui_kittest::kittest::NodeT;
+        n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+    }
+
+    fn side_disabled(h: &Harness<'static, App>, name: &str) -> bool {
+        use egui_kittest::kittest::NodeT;
+        side(h, name).accesskit_node().is_disabled()
+    }
+
+    const SIDEBAR: [&str; 23] = [
+        "New",
+        "Open project…",
+        "Save",
+        "Import DXF…",
+        "Export G-code…",
+        "Undo",
+        "Redo",
+        "Delete selection",
+        "Rotate selection",
+        "Flip selection horizontally",
+        "Flip selection vertically",
+        "Select",
+        "Line",
+        "Rectangle",
+        "Circle",
+        "Set origin",
+        "Zoom to fit",
+        "Show toolpaths",
+        "Simulation",
+        "Units",
+        "Machine",
+        "Stock",
+        "Tool library…",
+    ];
+
+    /// Clicks a sidebar button after moving the pointer away, so the previous button's tooltip cannot cover it.
+    fn click_side(h: &mut Harness<'static, App>, name: &str) {
+        h.hover_at(egui::pos2(700.0, 400.0));
+        h.run();
+        side(h, name).scroll_to_me();
+        h.run();
+        side(h, name).click();
+        h.run();
+    }
+
+    /// M10a.2 test 12. Save and Import DXF open a file dialog, so they are only checked for presence (as the menu tests).
+    #[test]
+    fn m10a2_t12_sidebar() {
+        let (s, _) = state::tests::bracket_issues();
+        let mut h = harness_for(s);
+        h.run();
+        for name in SIDEBAR {
+            side(&h, name);
+        }
+        assert!(h.state().state.dirty);
+        click_side(&mut h, "New");
+        assert_eq!(h.state().pending, Some(Pending::New));
+        h.state_mut().pending = None;
+        h.run();
+        click_side(&mut h, "Open project…");
+        assert_eq!(h.state().pending, Some(Pending::Open));
+        h.state_mut().pending = None;
+        h.run();
+        click_side(&mut h, "Export G-code…");
+        assert_eq!(h.state().export_prompt, Some(hc_toolpath::Severity::Error));
+        h.state_mut().export_prompt = None;
+        h.run();
+
+        // fresh project: edit buttons
+        let mut h = fresh();
+        h.run();
+        assert!(side_disabled(&h, "Undo") && side_disabled(&h, "Redo"));
+        for name in [
+            "Delete selection",
+            "Rotate selection",
+            "Flip selection horizontally",
+            "Flip selection vertically",
+        ] {
+            assert!(side_disabled(&h, name), "{name}");
+        }
+        h.state_mut()
+            .state
+            .add_shape(state::Shape::Rect {
+                min: hc_geom::Point::new(0.0, 0.0),
+                w: 20.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap();
+        h.run();
+        assert!(!side_disabled(&h, "Undo"));
+        let bbox = |h: &Harness<'static, App>| h.state().state.selection_bbox();
+        click_side(&mut h, "Rotate selection");
+        assert!((bbox(&h).width() - 10.0).abs() < 1e-9); // 90° default
+        let before = h.state().state.project.clone();
+        click_side(&mut h, "Flip selection horizontally");
+        assert_ne!(h.state().state.project, before);
+        click_side(&mut h, "Flip selection vertically");
+        click_side(&mut h, "Undo");
+        assert!(!side_disabled(&h, "Redo"));
+        click_side(&mut h, "Redo");
+        click_side(&mut h, "Delete selection");
+        assert!(h.state().state.project.items.is_empty());
+
+        // draw tools: exactly one selected
+        let tools = [
+            ("Select", state::CanvasTool::Select),
+            ("Line", state::CanvasTool::Line),
+            ("Rectangle", state::CanvasTool::Rect),
+            ("Circle", state::CanvasTool::Circle),
+            ("Set origin", state::CanvasTool::SetOrigin),
+        ];
+        for (name, tool) in tools.iter().rev() {
+            click_side(&mut h, name);
+            assert_eq!(h.state().state.tool, *tool);
+            for (other, _) in tools {
+                assert_eq!(toggled(&side(&h, other)), other == *name, "{name}/{other}");
+            }
+        }
+
+        // view
+        h.state_mut().state.fit_pending = false;
+        click_side(&mut h, "Zoom to fit");
+        // the canvas consumes fit_pending in the same frame: the view was fitted (zoom changes from 1.0)
+        assert!(!h.state().state.fit_pending);
+        assert!(toggled(&side(&h, "Show toolpaths")));
+        click_side(&mut h, "Show toolpaths");
+        assert!(!h.state().state.show_toolpaths);
+        assert!(!toggled(&side(&h, "Show toolpaths")));
+        click_side(&mut h, "Simulation");
+        assert!(h.state().state.sim_view.open && toggled(&side(&h, "Simulation")));
+
+        // settings popups: the same fields as the menu
+        for (name, field) in [
+            ("Units", "mm"),
+            ("Machine", "Safe Z"),
+            ("Stock", "Thickness"),
+        ] {
+            click_side(&mut h, name);
+            assert!(menu_q(&h, field, false).is_some(), "{name}: {field}");
+            h.key_press(egui::Key::Escape);
+            h.run();
+            assert!(menu_q(&h, field, false).is_none(), "{name} closed");
+        }
+        click_side(&mut h, "Tool library…");
+        assert!(h.state().tool_dialog.open);
+    }
+
+    /// M10a.2 test 14.
+    #[test]
+    fn m10a2_t14_capped_hint() {
+        let mut s = AppState::new(None);
+        let lines: Vec<hc_project::Geom> = (0..snap::MAX_X_SEGMENTS + 1)
+            .map(|k| {
+                let x = k as f64;
+                hc_project::Geom::Contour(
+                    hc_geom::shapes::line(hc_geom::Point::new(x, 0.0), hc_geom::Point::new(x, 1.0))
+                        .unwrap(),
+                )
+            })
+            .collect();
+        s.project.add_drawn(lines);
+        s.items_changed();
+        s.set_tool(state::CanvasTool::Line);
+        let mut h = harness_for(s);
+        h.run();
+        assert!(h.state().state.snap_cache.capped);
+        use egui_kittest::kittest::NodeT;
+        let label = h
+            .query_all_by_label_contains("Esc cancels")
+            .filter_map(|n| n.accesskit_node().label().or(n.accesskit_node().value()))
+            .next()
+            .expect("hint");
+        assert!(
+            label.ends_with("Intersection snaps off: drawing too large"),
+            "{label}"
+        );
+    }
+
+    /// Orchestrator decision (M10a.2): at 1280 x 800 every sidebar button is visible without scrolling.
+    #[test]
+    fn m10a2_sidebar_fits() {
+        let (s, _) = state::tests::bracket_issues(); // messages, issues and status panels all shown
+        let mut h = harness_for(s);
+        h.run();
+        let status_top = h.get_by_label("X – Y –").rect().min.y;
+        let issues_top = h.get_by_label_contains("Issues (").rect().min.y;
+        let bottom = status_top.min(issues_top);
+        let mut xs = std::collections::BTreeSet::new();
+        for name in SIDEBAR {
+            let r = side(&h, name).rect();
+            assert!(r.max.y <= bottom, "{name} at {r:?}, panel bottom {bottom}");
+            assert!(r.min.y >= 0.0);
+            xs.insert(r.min.x as i32);
+        }
+        assert_eq!(xs.len(), 2, "two columns: {xs:?}");
     }
 }

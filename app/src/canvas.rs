@@ -357,12 +357,7 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
     let stroke = Stroke::new(1.0, SNAP);
     if let Some(sn) = snap {
         let c = v.world_to_screen(rect, sn.p);
-        painter.rect_stroke(
-            Rect::from_center_size(c, Vec2::splat(8.0)),
-            0.0,
-            stroke,
-            egui::StrokeKind::Middle,
-        );
+        crate::snap::marker(painter, c, sn.kind, SNAP);
         painter.text(
             c + Vec2::new(10.0, -10.0),
             egui::Align2::LEFT_BOTTOM,

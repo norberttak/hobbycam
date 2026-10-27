@@ -140,6 +140,9 @@ Spec: `specs/M10.md`. Two parts, M10a first, each signed off on its own:
   Undo/redo of every project edit (whole-project snapshots, depth 100, one step per drag/field edit; Edit menu, Cmd/Ctrl+Z,
   Cmd/Ctrl+Shift+Z, Ctrl+Y).
   Test for an island sharing whole edges with its boundary (M5 ruling e).
+- **M10a.2:** snap to segment midpoints (lines, arcs) and intersections (line/arc, across and within items; bbox sweep, cached,
+  capped at 5000 segments / 20 000 points); one marker shape per snap kind. Left icon sidebar (Phosphor icon font, MIT, bundled)
+  with the menu actions plus delete/rotate/flip; tooltips with shortcuts, selected/disabled states, light and dark.
 - **M10b:** `hc-text`: Hershey Roman Simplex single-line (open strokes) and TTF outline (Ubuntu Light, already bundled by egui,
   `ttf-parser`); Text tool.
 - **Tests:** generated geometry dimensions; snap candidates and priority; origin shifts G-code only (checks/sim unchanged); format v4

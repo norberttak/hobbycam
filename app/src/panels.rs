@@ -1,7 +1,7 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
 use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity};
-use crate::{aci, App, Pending};
+use crate::{aci, icons, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
 use hc_geom::Transform;
 use hc_project::{
@@ -162,31 +162,8 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
             ui.menu_button("Settings", |ui| {
-                ui.menu_button("Units", |ui| {
-                    let u = app.state.project.units;
-                    if ui.radio(u == Units::Mm, "mm").clicked() {
-                        app.state.set_units(Units::Mm);
-                    }
-                    if ui.radio(u == Units::Inch, "inch").clicked() {
-                        app.state.set_units(Units::Inch);
-                    }
-                });
-                ui.menu_button("Machine", |ui| {
-                    let u = app.state.project.units;
-                    let mut m = app.state.project.machine.clone();
-                    egui::Grid::new("machine").show(ui, |ui| {
-                        for (name, v) in [
-                            ("Safe Z", &mut m.safe_z),
-                            ("Clearance Z", &mut m.clearance_z),
-                            ("Tool change Z", &mut m.tool_change_z),
-                        ] {
-                            let l = ui.label(name);
-                            length_field(ui, v, u, Quantity::Length).labelled_by(l.id);
-                            ui.end_row();
-                        }
-                    });
-                    app.state.set_machine(m);
-                });
+                ui.menu_button("Units", |ui| units_menu(app, ui));
+                ui.menu_button("Machine", |ui| machine_menu(app, ui));
                 ui.menu_button("Stock", |ui| stock_menu(app, ui));
                 if ui.button("Tool library…").clicked() {
                     app.tool_dialog.open = true;
@@ -194,6 +171,299 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+}
+
+fn units_menu(app: &mut App, ui: &mut Ui) {
+    let u = app.state.project.units;
+    if ui.radio(u == Units::Mm, "mm").clicked() {
+        app.state.set_units(Units::Mm);
+    }
+    if ui.radio(u == Units::Inch, "inch").clicked() {
+        app.state.set_units(Units::Inch);
+    }
+}
+
+fn machine_menu(app: &mut App, ui: &mut Ui) {
+    let u = app.state.project.units;
+    let mut m = app.state.project.machine.clone();
+    egui::Grid::new("machine").show(ui, |ui| {
+        for (name, v) in [
+            ("Safe Z", &mut m.safe_z),
+            ("Clearance Z", &mut m.clearance_z),
+            ("Tool change Z", &mut m.tool_change_z),
+        ] {
+            let l = ui.label(name);
+            length_field(ui, v, u, Quantity::Length).labelled_by(l.id);
+            ui.end_row();
+        }
+    });
+    app.state.set_machine(m);
+}
+
+/// One sidebar icon button: 40 px, the glyph at 24 px, tooltip "<name> (<shortcut>)", accessible name = `name`.
+fn side_button(
+    ui: &mut Ui,
+    glyph: &str,
+    name: &str,
+    shortcut: Option<String>,
+    enabled: bool,
+    selected: Option<bool>,
+) -> egui::Response {
+    let b = side_widget(glyph, selected.unwrap_or(false));
+    let r = ui.add_enabled(enabled, b);
+    side_info(&r, name, shortcut, enabled, selected)
+}
+
+fn side_widget(glyph: &str, selected: bool) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(glyph).size(24.0))
+        .min_size(egui::vec2(40.0, 40.0))
+        .selected(selected)
+}
+
+fn side_info(
+    r: &egui::Response,
+    name: &str,
+    shortcut: Option<String>,
+    enabled: bool,
+    selected: Option<bool>,
+) -> egui::Response {
+    r.widget_info(|| match selected {
+        Some(on) => egui::WidgetInfo::selected(egui::Role::Button, enabled, on, name),
+        None => egui::WidgetInfo::labeled(egui::Role::Button, enabled, name),
+    });
+    let tip = match shortcut {
+        Some(sc) => format!("{name} ({sc})"),
+        None => name.to_string(),
+    };
+    r.clone().on_hover_text(tip).on_disabled_hover_text(name)
+}
+
+/// A sidebar button that opens `content` (the same function as the menu) in a popup.
+fn side_menu(app: &mut App, ui: &mut Ui, glyph: &str, name: &str, content: fn(&mut App, &mut Ui)) {
+    let (r, _) = egui::containers::menu::MenuButton::from_button(side_widget(glyph, false))
+        .ui(ui, |ui| content(app, ui));
+    side_info(&r, name, None, true, None);
+}
+
+/// Gap between the two button columns and between rows.
+const SIDEBAR_GAP: f32 = 4.0;
+/// Two 40 px buttons, the gap and the panel margins (8 px each side).
+const SIDEBAR_W: f32 = 2.0 * 40.0 + SIDEBAR_GAP + 16.0;
+
+/// What a sidebar button does; applied after the bar is drawn (one borrow of `app` at a time).
+#[derive(Clone, Copy)]
+enum SideAct {
+    Tool(CanvasTool),
+    Fit,
+    Undo,
+    Redo,
+    Delete,
+    Rotate,
+    Flip(bool),
+    New,
+    Open,
+    Save,
+    Import,
+    Export,
+    Toolpaths,
+    Sim,
+    Tools,
+    /// Opens a popup with the same function as the menu.
+    Menu(fn(&mut App, &mut Ui)),
+}
+
+struct SideEntry {
+    glyph: &'static str,
+    name: &'static str,
+    shortcut: Option<String>,
+    enabled: bool,
+    selected: Option<bool>,
+    act: SideAct,
+}
+
+fn entry(
+    glyph: &'static str,
+    name: &'static str,
+    shortcut: Option<String>,
+    act: SideAct,
+) -> SideEntry {
+    SideEntry {
+        glyph,
+        name,
+        shortcut,
+        enabled: true,
+        selected: None,
+        act,
+    }
+}
+
+/// Left icon bar, two columns: every menu action except Save as… and Quit, plus Delete / Rotate / Flip of the selection.
+pub fn sidebar(app: &mut App, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    egui::Panel::left("sidebar")
+        .resizable(false)
+        .exact_size(SIDEBAR_W)
+        .show(ui, |ui| {
+            // fallback only: at 1280 x 800 every button is visible (kittest m10a2_sidebar_fits)
+            egui::ScrollArea::vertical().show(ui, |ui| sidebar_buttons(app, ui, &ctx));
+        });
+}
+
+fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntry>> {
+    let sc = |s: &KeyboardShortcut| Some(ctx.format_shortcut(s));
+    let key = |k: &str| Some(k.to_string());
+    let s = &app.state;
+    let tool = |glyph, name, k, t: CanvasTool| SideEntry {
+        selected: Some(s.tool == t),
+        ..entry(glyph, name, key(k), SideAct::Tool(t))
+    };
+    let when = |on: bool, e: SideEntry| SideEntry { enabled: on, ..e };
+    let toggle = |on: bool, e: SideEntry| SideEntry {
+        selected: Some(on),
+        ..e
+    };
+    let sel = !s.selection.is_empty();
+    vec![
+        vec![
+            tool(icons::SELECT, "Select", "Esc", CanvasTool::Select),
+            tool(icons::LINE, "Line", "L", CanvasTool::Line),
+            tool(icons::RECT, "Rectangle", "R", CanvasTool::Rect),
+            tool(icons::CIRCLE, "Circle", "C", CanvasTool::Circle),
+            tool(icons::ORIGIN, "Set origin", "O", CanvasTool::SetOrigin),
+            entry(icons::FIT, "Zoom to fit", key("F"), SideAct::Fit),
+        ],
+        vec![
+            when(
+                s.can_undo(),
+                entry(icons::UNDO, "Undo", sc(&SC_UNDO), SideAct::Undo),
+            ),
+            when(
+                s.can_redo(),
+                entry(icons::REDO, "Redo", sc(&SC_REDO), SideAct::Redo),
+            ),
+            when(
+                sel,
+                entry(
+                    icons::DELETE,
+                    "Delete selection",
+                    key("Del"),
+                    SideAct::Delete,
+                ),
+            ),
+            when(
+                sel,
+                entry(icons::ROTATE, "Rotate selection", None, SideAct::Rotate),
+            ),
+            when(
+                sel,
+                entry(
+                    icons::FLIP_H,
+                    "Flip selection horizontally",
+                    None,
+                    SideAct::Flip(true),
+                ),
+            ),
+            when(
+                sel,
+                entry(
+                    icons::FLIP_V,
+                    "Flip selection vertically",
+                    None,
+                    SideAct::Flip(false),
+                ),
+            ),
+        ],
+        vec![
+            entry(icons::NEW, "New", sc(&SC_NEW), SideAct::New),
+            entry(icons::OPEN, "Open project…", sc(&SC_OPEN), SideAct::Open),
+            entry(icons::SAVE, "Save", sc(&SC_SAVE), SideAct::Save),
+            entry(
+                icons::IMPORT,
+                "Import DXF…",
+                sc(&SC_IMPORT),
+                SideAct::Import,
+            ),
+            entry(
+                icons::EXPORT,
+                "Export G-code…",
+                sc(&SC_EXPORT),
+                SideAct::Export,
+            ),
+        ],
+        vec![
+            toggle(
+                s.show_toolpaths,
+                entry(icons::TOOLPATHS, "Show toolpaths", None, SideAct::Toolpaths),
+            ),
+            toggle(
+                s.sim_view.open,
+                entry(icons::SIM, "Simulation", None, SideAct::Sim),
+            ),
+        ],
+        vec![
+            entry(icons::TOOLS, "Tool library…", None, SideAct::Tools),
+            entry(icons::STOCK, "Stock", None, SideAct::Menu(stock_menu)),
+            entry(icons::MACHINE, "Machine", None, SideAct::Menu(machine_menu)),
+            entry(icons::UNITS, "Units", None, SideAct::Menu(units_menu)),
+        ],
+    ]
+}
+
+fn sidebar_buttons(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
+    ui.spacing_mut().item_spacing = egui::vec2(SIDEBAR_GAP, SIDEBAR_GAP);
+    let groups = sidebar_groups(app, ctx);
+    let mut clicked = None;
+    for (g, group) in groups.into_iter().enumerate() {
+        if g > 0 {
+            ui.separator();
+        }
+        // two per row; an odd group leaves its last cell empty
+        for row in group.chunks(2) {
+            ui.horizontal(|ui| {
+                for e in row {
+                    if let SideAct::Menu(content) = e.act {
+                        side_menu(app, ui, e.glyph, e.name, content);
+                    } else if side_button(
+                        ui,
+                        e.glyph,
+                        e.name,
+                        e.shortcut.clone(),
+                        e.enabled,
+                        e.selected,
+                    )
+                    .clicked()
+                    {
+                        clicked = Some(e.act);
+                    }
+                }
+            });
+        }
+    }
+    let s = &mut app.state;
+    match clicked {
+        None | Some(SideAct::Menu(_)) => {}
+        Some(SideAct::Tool(t)) => s.set_tool(t),
+        Some(SideAct::Fit) => s.fit_pending = true,
+        Some(SideAct::Undo) => {
+            s.undo();
+        }
+        Some(SideAct::Redo) => {
+            s.redo();
+        }
+        Some(SideAct::Delete) => s.delete_selection(),
+        Some(SideAct::Rotate) => s.rotate_selection(),
+        Some(SideAct::Flip(h)) => s.flip_selection(h),
+        Some(SideAct::Toolpaths) => s.show_toolpaths = !s.show_toolpaths,
+        Some(SideAct::Sim) => s.sim_view.open = !s.sim_view.open,
+        Some(SideAct::New) => app.request(ctx, Pending::New),
+        Some(SideAct::Open) => app.request(ctx, Pending::Open),
+        Some(SideAct::Save) => {
+            app.save();
+        }
+        Some(SideAct::Import) => app.import_dxf(),
+        Some(SideAct::Export) => app.export_gcode(),
+        Some(SideAct::Tools) => app.tool_dialog.open = true,
+    }
 }
 
 fn stock_menu(app: &mut App, ui: &mut Ui) {
@@ -306,7 +576,12 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
             ui.label(format!("{} selected", s.selection.len()));
             if let Some(h) = s.tool.hint(s.pending.is_some()) {
                 ui.separator();
-                ui.label(format!("{h} · Esc cancels"));
+                let cap = if s.snap_cache.capped {
+                    " · Intersection snaps off: drawing too large"
+                } else {
+                    ""
+                };
+                ui.label(format!("{h} · Esc cancels{cap}"));
             }
         });
     });
@@ -876,6 +1151,8 @@ fn transform_group(app: &mut App, ui: &mut Ui) {
     let x = &mut s.xform;
     let mut t = None;
     let mut delete = false;
+    let mut rotate = false;
+    let mut flip = None;
     ui.group(|ui| {
         ui.strong("Transform");
         egui::Grid::new("xform").num_columns(2).show(ui, |ui| {
@@ -893,9 +1170,7 @@ fn transform_group(app: &mut App, ui: &mut Ui) {
             let l = ui.label("Angle");
             ui.add(egui::DragValue::new(&mut x.angle_deg).suffix("°"))
                 .labelled_by(l.id);
-            if ui.button("Rotate").clicked() {
-                t = Some(Transform::rotate(x.angle_deg.to_radians(), c));
-            }
+            rotate = ui.button("Rotate").clicked();
         });
         ui.horizontal(|ui| {
             let l = ui.label("Factor");
@@ -908,10 +1183,10 @@ fn transform_group(app: &mut App, ui: &mut Ui) {
         });
         ui.horizontal(|ui| {
             if ui.button("Flip horizontally").clicked() {
-                t = Some(Transform::mirror_y(c.x));
+                flip = Some(true);
             }
             if ui.button("Flip vertically").clicked() {
-                t = Some(Transform::mirror_x(c.y));
+                flip = Some(false);
             }
         });
         delete = ui.button("Delete").clicked();
@@ -919,6 +1194,12 @@ fn transform_group(app: &mut App, ui: &mut Ui) {
     });
     if let Some(t) = t {
         s.transform_selection(&t);
+    }
+    if rotate {
+        s.rotate_selection();
+    }
+    if let Some(h) = flip {
+        s.flip_selection(h);
     }
     if delete {
         s.delete_selection();
