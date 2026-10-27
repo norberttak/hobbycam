@@ -316,8 +316,10 @@ impl Project {
                     tool: op.tool,
                 });
             }
+            let mut listed = HashSet::new();
             for &item in &op.items {
-                if !item_ids.contains(&item) {
+                // one problem per (op, item), even when the op lists the item twice
+                if !item_ids.contains(&item) && listed.insert(item) {
                     problems.push(Problem::MissingItem { op: op.id, item });
                 }
             }
@@ -341,8 +343,9 @@ impl Project {
             }
         }
         let mut seen_tools = HashSet::new();
+        let mut reported_tools = HashSet::new();
         for t in &self.tools {
-            if !seen_tools.insert(t.id) {
+            if !seen_tools.insert(t.id) && reported_tools.insert(t.id) {
                 problems.push(Problem::DuplicateToolId(t.id));
             }
         }

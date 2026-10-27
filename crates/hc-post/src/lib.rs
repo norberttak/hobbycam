@@ -6,11 +6,8 @@ pub use linuxcnc::{sanitize_comment, LinuxCnc};
 
 use hc_geom::Point;
 use hc_project::{Project, Units, WorkOrigin};
-use hc_toolpath::{generate, Move, Point3, ToolpathError};
+use hc_toolpath::{check, generate, Issue, Move, Point3, Severity};
 use std::fmt;
-
-/// Tolerance (mm) for the tool_change_z ≥ safe_z rule.
-const TOL: f64 = 1e-9;
 
 /// One output file = one tool segment, already checked, in mm, work origin applied. Dialects never see the Project.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,13 +50,8 @@ pub trait PostProcessor {
 pub enum PostError {
     UnknownPost(String),
     NothingToExport,
-    /// First failing op in user order.
-    OpFailed {
-        op: String,
-        error: ToolpathError,
-    },
-    /// Also a non-finite tool_change_z.
-    ToolChangeBelowSafe,
+    /// The Error issues of `hc_toolpath::check`, in check order (never empty).
+    Blocked(Vec<Issue>),
     /// Non-finite value or first move not a Rapid (internal bug guard); the op id.
     BadToolpath(u64),
 }
@@ -71,11 +63,21 @@ impl fmt::Display for PostError {
                 write!(f, "Unknown post processor \"{name}\" (available: linuxcnc)")
             }
             PostError::NothingToExport => write!(f, "Nothing to export: no enabled operations"),
-            PostError::OpFailed { op, error } => {
-                write!(f, "Operation \"{op}\" has an error: {error}")
-            }
-            PostError::ToolChangeBelowSafe => {
-                write!(f, "Tool change Z must be at or above safe Z")
+            PostError::Blocked(issues) => {
+                let n = issues.len();
+                write!(
+                    f,
+                    "Cannot export: {n} error{}",
+                    if n == 1 { "" } else { "s" }
+                )?;
+                if let Some(i) = issues.first() {
+                    // shortcut: the op id, not its name (the error has no Project); the GUI shows names
+                    match i.op {
+                        Some(op) => write!(f, ". First: Operation {op}: {}", i.message)?,
+                        None => write!(f, ". First: Project: {}", i.message)?,
+                    }
+                }
+                Ok(())
             }
             PostError::BadToolpath(id) => {
                 write!(f, "Internal error: invalid toolpath for operation {id}")
@@ -193,12 +195,16 @@ fn shift_move(m: Move, o: Point) -> Move {
 pub fn export(project: &Project, name: &str) -> Result<Vec<GcodeFile>, PostError> {
     let post = post_for(&project.machine.post)?;
     let m = &project.machine;
-    if !m.tool_change_z.is_finite() || m.tool_change_z < m.safe_z - TOL {
-        return Err(PostError::ToolChangeBelowSafe);
-    }
     let paths = generate(project);
     if paths.is_empty() {
         return Err(PostError::NothingToExport);
+    }
+    let errors: Vec<Issue> = check(project, &paths)
+        .into_iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    if !errors.is_empty() {
+        return Err(PostError::Blocked(errors));
     }
     let origin = work_origin(project);
     let op_name = |id: u64| {
@@ -212,10 +218,10 @@ pub fn export(project: &Project, name: &str) -> Result<Vec<GcodeFile>, PostError
     // (tool, ops) per segment
     let mut segments: Vec<(u32, Vec<JobOp>)> = Vec::new();
     for (id, res) in paths {
-        let tp = res.map_err(|error| PostError::OpFailed {
-            op: op_name(id),
-            error,
-        })?;
+        // check() reports every Err, so this is the internal guard only
+        let Ok(tp) = res else {
+            return Err(PostError::BadToolpath(id));
+        };
         let moves: Vec<Move> = tp
             .moves
             .into_iter()
@@ -304,6 +310,25 @@ mod tests {
         assert_eq!(
             post_for("grbl").err().unwrap().to_string(),
             "Unknown post processor \"grbl\" (available: linuxcnc)"
+        );
+    }
+
+    #[test]
+    fn blocked_display() {
+        let i = |op| Issue {
+            severity: Severity::Error,
+            rule: hc_toolpath::RuleId::NoItems,
+            op,
+            item: None,
+            message: "No geometry assigned".into(),
+        };
+        assert_eq!(
+            PostError::Blocked(vec![i(Some(3)), i(None)]).to_string(),
+            "Cannot export: 2 errors. First: Operation 3: No geometry assigned"
+        );
+        assert_eq!(
+            PostError::Blocked(vec![i(None)]).to_string(),
+            "Cannot export: 1 error. First: Project: No geometry assigned"
         );
     }
 

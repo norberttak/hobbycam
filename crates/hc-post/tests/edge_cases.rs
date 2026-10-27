@@ -7,7 +7,7 @@ use hc_project::{
     Direction, Geom, Item, OpKind, Project, ProjectError, Side, Source, TabPlacement, Tool,
     ToolKind, Units, WorkOrigin,
 };
-use hc_toolpath::{generate, Move, Point3, ToolpathError};
+use hc_toolpath::{generate, Move, Point3, RuleId};
 use std::fs;
 use std::path::PathBuf;
 
@@ -731,12 +731,28 @@ fn first_failing_enabled_op_is_reported_and_nothing_exported() {
     op(&mut pr, "bad 1", inside.clone(), &huge, vec![sq]);
     op(&mut pr, "bad 2", inside, &huge, vec![sq]);
     pr.operations[1].enabled = false;
+    // M8: every failing enabled op is reported (in user order), the disabled one is not
+    let (bad1, bad2) = (pr.operations[2].id, pr.operations[3].id);
     match export(&pr, "x") {
-        Err(PostError::OpFailed { op, error }) => {
-            assert_eq!(op, "bad 1");
-            assert_eq!(error, ToolpathError::OffsetVanished(sq));
+        Err(PostError::Blocked(v)) => {
+            let got: Vec<_> = v.iter().map(|i| (i.rule, i.op, i.item)).collect();
+            assert_eq!(
+                got,
+                [
+                    (RuleId::ToolTooLarge, Some(bad1), Some(sq)),
+                    (RuleId::ToolTooLarge, Some(bad2), Some(sq))
+                ]
+            );
         }
         other => panic!("{other:?}"),
+    }
+}
+
+/// Export is blocked by exactly one InvalidMachine issue (M7: ToolChangeBelowSafe).
+fn machine_blocked(pr: &Project) -> bool {
+    match export(pr, "x") {
+        Err(PostError::Blocked(v)) => v.len() == 1 && v[0].rule == RuleId::InvalidMachine,
+        _ => false,
     }
 }
 
@@ -746,17 +762,17 @@ fn tool_change_z_rules() {
     pr.machine.tool_change_z = 5.0 - 1e-12; // within tolerance
     assert!(export(&pr, "x").is_ok());
     pr.machine.tool_change_z = 4.999;
-    assert_eq!(export(&pr, "x"), Err(PostError::ToolChangeBelowSafe));
+    assert!(machine_blocked(&pr));
     for v in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         pr.machine.tool_change_z = v;
-        assert_eq!(export(&pr, "x"), Err(PostError::ToolChangeBelowSafe), "{v}");
+        assert!(machine_blocked(&pr), "{v}");
     }
-    // checked before generate: an all-disabled project still reports the tool change error
+    // M8 order: NothingToExport comes before check, so an all-disabled project reports that
     for o in &mut pr.operations {
         o.enabled = false;
     }
     pr.machine.tool_change_z = 1.0;
-    assert_eq!(export(&pr, "x"), Err(PostError::ToolChangeBelowSafe));
+    assert_eq!(export(&pr, "x"), Err(PostError::NothingToExport));
     // inch footer
     let mut pr = mixed();
     pr.units = Units::Inch;
@@ -771,8 +787,14 @@ fn bad_toolpath_guard_non_finite_stock_origin() {
     let mut pr = mixed();
     pr.stock.origin = WorkOrigin::StockBottomLeft;
     pr.stock.min_x = f64::NAN;
-    let first = pr.operations[0].id;
-    assert_eq!(export(&pr, "x"), Err(PostError::BadToolpath(first)));
+    // M8: rule InvalidStock catches it before the BadToolpath guard
+    match export(&pr, "x") {
+        Err(PostError::Blocked(v)) => {
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0].rule, RuleId::InvalidStock);
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------- naming / comments
@@ -930,7 +952,7 @@ fn v2_migrate_tool_change_z() {
     // a migrated project never fails the tool change rule, even with a high safe Z
     let (pr, _) = Project::from_json(&with_safe("60.0")).unwrap();
     assert_eq!(pr.machine.tool_change_z, 60.0);
-    assert_ne!(export(&pr, "m"), Err(PostError::ToolChangeBelowSafe));
+    assert!(!machine_blocked(&pr));
 }
 
 #[test]

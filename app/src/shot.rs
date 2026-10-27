@@ -28,21 +28,7 @@ fn shot_bracket() {
     save(&mut h, "file_menu");
 }
 
-/// Outline circle ids with diameter `d` (mm).
-fn circles(s: &AppState, d: f64) -> Vec<u64> {
-    s.project
-        .items
-        .iter()
-        .filter(|i| i.layer == "Outline")
-        .filter(|i| match &i.geom {
-            hc_project::Geom::Contour(c) => c
-                .as_circle()
-                .is_some_and(|ci| (2.0 * ci.radius - d).abs() < 1e-6),
-            _ => false,
-        })
-        .map(|i| i.id)
-        .collect()
-}
+use state::tests::circles;
 
 /// M5 test 17. Manual check: feed vs rapid clearly different, arcs smooth, no path through islands.
 #[test]
@@ -159,4 +145,23 @@ fn shot_tabs() {
     assert!(h.query_by_label("Reset to auto").is_some());
     assert!(h.state().state.toolpaths[0].1.is_ok());
     save(&mut h, "tabs");
+}
+
+/// M8 test 33. Manual check: readable in light and dark mode, coloured severity words, no tofu.
+#[test]
+#[ignore]
+fn shot_issues() {
+    for (name, theme) in [
+        ("issues", egui::Theme::Dark),
+        ("issues_light", egui::Theme::Light),
+    ] {
+        let (s, _) = state::tests::bracket_issues();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        assert!(h.query_by_label_contains("Issues (2)").is_some());
+        save(&mut h, name);
+    }
 }

@@ -1,8 +1,10 @@
 //! Operations -> toolpaths (move lists). Units mm and mm/min, Z0 = stock top, cutting Z negative.
 
+mod check;
 mod offset;
 mod tabs;
 
+pub use check::{check, describe, Issue, RuleId, Severity};
 pub use offset::{offset_closed, pocket_rings};
 pub use tabs::tab_positions;
 

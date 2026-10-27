@@ -11,7 +11,7 @@
 | Operations | Engrave (on line), Contour (inside / outside), Pocket, Drill |
 | Text | Single-line (stroke) font for engraving **and** outline (TTF) fonts |
 | Project file | JSON (`.hcam`), with a `format_version` field |
-| Tool change | Manual: `T<n> M6` (LinuxCNC manual toolchange) + `M0` pause, comment with tool name |
+| Tool change | Manual, between files: one `.ngc` per tool segment, tool named in the header comment, ends at `tool_change_z` (no `T`/`M6`/`M0`) |
 | License | GPL-3.0-or-later; all dependencies must be GPL-compatible (MIT/Apache/BSD/OFL) |
 | Distribution | GitHub Releases (Windows .zip, macOS signed+notarized .dmg) and Mac App Store |
 
@@ -110,11 +110,13 @@ Each milestone ends with: `cargo fmt --check`, `cargo clippy -D warnings`, `carg
 
 ### M7 – G-code output (`hc-post`)
 - `PostProcessor` trait; `LinuxCnc` implementation
-- Header (`G17 G21|G20 G90 G94`, program comment), tool change block (`M5`, `G0 Z<safe>`, `T<n> M6`, `M0` + comment, `S<rpm> M3`), footer (`M5 M2`)
+- One file per tool segment (maximal run of consecutive enabled ops with the same tool, user order kept): `<stem>_<k>_T<n>.ngc`, a single segment gives `<stem>.ngc`. The user changes the bit and re-zeroes Z between files.
+- Header (program, tool and "load T<n>, set Z0" comments; `G17 G21|G20 G40 G49 G80 G90 G91.1 G94 G98`), per op `S<rpm> M3` + dwell, footer (`G0 Z<tool_change_z>`, `M5`, `M2`); no `T`/`M6`/`M0`/`G43`
+- Machine setting `tool_change_z` (≥ safe Z, default 40 mm), project format v3
 - **Tests:** golden-file tests (expected `.ngc` for a few fixture projects).
 
 ### M8 – Sanity checks
-Run before export; errors block export, warnings don't:
+Spec: `specs/M8.md` (`hc_toolpath::check`, one Issue list, live after every regeneration and again at export). Errors block export, warnings ask "Export anyway?":
 - Pocket/contour feature smaller than tool diameter, or offset produced nothing
 - Depth greater than tool flute length; depth per pass > depth; zero/negative feed, RPM, depth
 - Pocket/inside contour on an open contour

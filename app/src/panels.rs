@@ -4,7 +4,8 @@ use crate::state::{kind_label, MoveDir, NewKind, Severity};
 use crate::{aci, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
 use hc_project::{
-    from_display, parse_length, to_display, Direction, Geom, OpKind, Side, TabPlacement, Units,
+    fmt_len, from_display, parse_length, to_display, Direction, Geom, OpKind, Side, TabPlacement,
+    Units,
 };
 
 #[derive(Clone, Copy)]
@@ -33,14 +34,6 @@ pub fn length_field(ui: &mut Ui, mm: &mut f64, units: Units, q: Quantity) -> egu
         *mm = from_display(v, units);
     }
     r
-}
-
-/// Read-only length in display units: 3 decimals for mm, 4 for inch.
-pub fn fmt_len(mm: f64, u: Units) -> String {
-    match u {
-        Units::Mm => format!("{mm:.3} mm"),
-        Units::Inch => format!("{:.4} in", to_display(mm, u)),
-    }
 }
 
 const SC_NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::N);
@@ -207,6 +200,56 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// "Error" / "Warning" in its colour, then " · <op> · <message>" in the text colour.
+pub fn issue_job(ui: &Ui, word: &str, rest: &str) -> egui::text::LayoutJob {
+    let v = ui.visuals();
+    let color = if word == "Error" {
+        v.error_fg_color
+    } else {
+        v.warn_fg_color
+    };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(word, 0.0, egui::TextFormat::simple(font.clone(), color));
+    job.append(
+        &format!(" · {rest}"),
+        0.0,
+        egui::TextFormat::simple(font, v.text_color()),
+    );
+    job
+}
+
+/// Bottom panel above the status bar; a click selects the op (and the item).
+pub fn issues(app: &mut App, ui: &mut Ui) {
+    if app.state.issues.is_empty() {
+        return;
+    }
+    let mut clicked = None;
+    egui::Panel::bottom("issues")
+        .resizable(true)
+        .default_size(120.0)
+        .show(ui, |ui| {
+            ui.heading(format!("Issues ({})", app.state.issues.len()));
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (k, i) in app.state.issues.iter().enumerate() {
+                        let (word, rest) = app.state.issue_parts(i);
+                        if ui
+                            .selectable_label(false, issue_job(ui, word, &rest))
+                            .clicked()
+                        {
+                            clicked = Some(k);
+                        }
+                    }
+                });
+        });
+    if let Some(k) = clicked {
+        let i = app.state.issues[k].clone();
+        app.state.select_issue(&i);
+    }
+}
+
 pub fn left(app: &mut App, ui: &mut Ui) {
     egui::Panel::left("left")
         .default_size(260.0)
@@ -285,16 +328,14 @@ fn operations(app: &mut App, ui: &mut Ui) {
                 act = Some(Act::Delete(op.id));
             }
         });
-        match app.state.toolpath_result(op.id) {
-            Some(Err(e)) => {
-                ui.colored_label(ui.visuals().error_fg_color, format!("Error: {e}"));
-            }
-            Some(Ok(tp)) => {
-                for n in &tp.notes {
-                    ui.colored_label(ui.visuals().warn_fg_color, format!("Note: {n}"));
-                }
-            }
-            None => {}
+        if let Some((text, errors)) = app.state.op_issue_summary(op.id) {
+            let v = ui.visuals();
+            let color = if errors {
+                v.error_fg_color
+            } else {
+                v.warn_fg_color
+            };
+            ui.colored_label(color, text);
         }
     }
     match act {

@@ -52,6 +52,8 @@ pub struct App {
     pub box_start: Option<egui::Pos2>,
     /// A left-button drag that started on a tab marker moves that tab.
     pub tab_drag: bool,
+    /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
+    pub export_prompt: Option<hc_toolpath::Severity>,
 }
 
 impl App {
@@ -65,6 +67,7 @@ impl App {
             title: String::new(),
             box_start: None,
             tab_drag: false,
+            export_prompt: None,
         }
     }
 
@@ -84,12 +87,14 @@ impl App {
         panels::menu(self, ui);
         panels::messages(self, ui);
         panels::status_bar(self, ui);
+        panels::issues(self, ui);
         panels::left(self, ui);
         panels::right(self, ui);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| canvas::show(self, ui));
         self.guard_modal(&ctx);
+        self.export_modal(&ctx);
         tool_dialog::show(self, &ctx);
     }
 
@@ -155,8 +160,17 @@ impl App {
         }
     }
 
-    /// Export errors are shown without a dialog; the chosen file name is the base of all segment files.
+    /// Fresh check first: errors refuse, warnings ask, clean goes straight to the file dialog.
     pub fn export_gcode(&mut self) {
+        self.state.refresh_toolpaths();
+        self.export_prompt = self.state.issues.iter().map(|i| i.severity).max();
+        if self.export_prompt.is_none() {
+            self.write_export();
+        }
+    }
+
+    /// Runs after the check passed or the user confirmed the warnings; the chosen file name is the base of all segment files.
+    fn write_export(&mut self) {
         let Some(files) = self.state.gcode() else {
             return;
         };
@@ -173,6 +187,42 @@ impl App {
         }
         if let Some(base) = dialog.save_file() {
             self.state.write_gcode(&base, &files);
+        }
+    }
+
+    fn export_modal(&mut self, ctx: &egui::Context) {
+        use hc_toolpath::Severity as S;
+        let Some(sev) = self.export_prompt else {
+            return;
+        };
+        let mut done = false;
+        let mut export = false;
+        let modal = egui::Modal::new(egui::Id::unique("export_prompt")).show(ctx, |ui| {
+            ui.heading(match sev {
+                S::Error => "Cannot export G-code",
+                S::Warning => "Export anyway?",
+            });
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for i in self.state.issues.iter().filter(|i| i.severity == sev) {
+                        let (word, rest) = self.state.issue_parts(i);
+                        ui.label(panels::issue_job(ui, word, &rest));
+                    }
+                });
+            ui.horizontal(|ui| match sev {
+                S::Error => done = ui.button("OK").clicked(),
+                S::Warning => {
+                    export = ui.button("Export anyway").clicked();
+                    done = ui.button("Cancel").clicked();
+                }
+            });
+        });
+        if done || export || modal.should_close() {
+            self.export_prompt = None;
+        }
+        if export {
+            self.write_export();
         }
     }
 
@@ -282,5 +332,69 @@ mod kittest {
         for name in ["Safe Z", "Clearance Z", "Tool change Z"] {
             assert!(h.query_by_label(name).is_some(), "{name}");
         }
+    }
+
+    fn harness_for(s: AppState) -> Harness<'static, App> {
+        Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s))
+    }
+
+    /// M8 test 32.
+    #[test]
+    fn m8_t32_issues_panel_and_export_modals() {
+        let (s, inside) = state::tests::bracket_issues();
+        let mut h = harness_for(s);
+        h.run();
+        assert!(h.query_by_label_contains("Issues (2)").is_some());
+        assert!(h
+            .query_by_label(
+                "Error · Contour 2 · Tool too large for the circle Ø15.875 mm on layer Outline"
+            )
+            .is_some());
+        assert!(h
+            .query_by_label("Warning · Contour 1 · Spindle speed is 0 (S0)")
+            .is_some());
+        assert!(h.query_by_label("1 error").is_some());
+        assert!(h.query_by_label("1 warning").is_some());
+        h.get_by_label_contains("Tool too large").click();
+        h.run();
+        assert_eq!(h.state().state.selected_op, Some(inside));
+        assert_eq!(h.state().state.selection.len(), 1);
+
+        // errors: refusal modal, no file dialog, nothing written
+        h.state_mut().export_gcode();
+        h.run();
+        assert_eq!(h.state().export_prompt, Some(hc_toolpath::Severity::Error));
+        assert!(h.query_by_label("Cannot export G-code").is_some());
+        assert!(!h
+            .state()
+            .state
+            .messages
+            .iter()
+            .any(|m| m.text.starts_with("Exported")));
+        h.get_by_label("OK").click();
+        h.run();
+        assert_eq!(h.state().export_prompt, None);
+        assert!(h.query_by_label("Cannot export G-code").is_none());
+
+        // only warnings: "Export anyway?" with Cancel
+        h.state_mut().state.delete_op(inside);
+        h.run();
+        h.state_mut().export_gcode();
+        h.run();
+        assert!(h.query_by_label("Export anyway?").is_some());
+        assert!(h.query_by_label("Export anyway").is_some());
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().export_prompt, None);
+        assert!(h.query_by_label("Export anyway?").is_none());
+        // Escape closes it too
+        h.state_mut().export_gcode();
+        h.run();
+        assert!(h.query_by_label("Export anyway?").is_some());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().export_prompt, None);
     }
 }

@@ -6,10 +6,10 @@ use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::{BBox, Contour, Point};
 use hc_post::GcodeFile;
 use hc_project::{
-    Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Problem, Project, Side, Tool,
+    Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Tool,
     ToolLibrary, Units,
 };
-use hc_toolpath::{Toolpath, ToolpathError};
+use hc_toolpath::{Issue, Toolpath, ToolpathError};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -107,6 +107,8 @@ pub struct AppState {
     pub toolpaths: Vec<(u64, Result<Toolpath, ToolpathError>)>,
     /// The project `toolpaths` were generated from.
     pub toolpaths_for: Option<Project>,
+    /// `hc_toolpath::check` of `toolpaths`, refreshed with them.
+    pub issues: Vec<Issue>,
     /// Not saved.
     pub show_toolpaths: bool,
 }
@@ -145,6 +147,7 @@ impl AppState {
             item_bbox: Vec::new(),
             toolpaths: Vec::new(),
             toolpaths_for: None,
+            issues: Vec::new(),
             show_toolpaths: true,
         };
         if let Some(e) = s.library_error.clone() {
@@ -165,6 +168,7 @@ impl AppState {
     pub fn refresh_toolpaths(&mut self) {
         if self.toolpaths_for.as_ref() != Some(&self.project) {
             self.toolpaths = hc_toolpath::generate(&self.project);
+            self.issues = hc_toolpath::check(&self.project, &self.toolpaths);
             self.toolpaths_for = Some(self.project.clone());
         }
     }
@@ -230,11 +234,9 @@ impl AppState {
 
     pub fn open(&mut self, path: &Path) -> bool {
         match Project::load(path) {
-            Ok((p, problems)) => {
+            // load problems show up in `issues` (M8)
+            Ok((p, _)) => {
                 self.replace_project(p, Some(path.to_path_buf()));
-                for pr in problems {
-                    self.msg(Severity::Warning, problem_text(&pr));
-                }
                 true
             }
             Err(e) => {
@@ -844,6 +846,65 @@ impl AppState {
         })
     }
 
+    /// ("Error" | "Warning", "<op name or Project> · <message>") of an issue.
+    pub fn issue_parts(&self, i: &Issue) -> (&'static str, String) {
+        let word = match i.severity {
+            hc_toolpath::Severity::Error => "Error",
+            hc_toolpath::Severity::Warning => "Warning",
+        };
+        let place = match i.op {
+            None => "Project".to_string(),
+            Some(id) => self
+                .project
+                .operations
+                .iter()
+                .find(|o| o.id == id)
+                .map_or(format!("Operation {id}"), |o| o.name.clone()),
+        };
+        (word, format!("{place} · {}", i.message))
+    }
+
+    /// "Error · Contour 1 · Spindle speed is 0 (S0)" (tests only).
+    #[cfg(test)]
+    pub fn issue_text(&self, i: &Issue) -> String {
+        let (word, rest) = self.issue_parts(i);
+        format!("{word} · {rest}")
+    }
+
+    /// "1 error, 2 warnings" for an op and whether it has errors; None when clean.
+    pub fn op_issue_summary(&self, op: u64) -> Option<(String, bool)> {
+        let count = |sev| {
+            self.issues
+                .iter()
+                .filter(|i| i.op == Some(op) && i.severity == sev)
+                .count()
+        };
+        let (e, w) = (
+            count(hc_toolpath::Severity::Error),
+            count(hc_toolpath::Severity::Warning),
+        );
+        let part = |n: usize, word: &str| match n {
+            0 => None,
+            1 => Some(format!("1 {word}")),
+            n => Some(format!("{n} {word}s")),
+        };
+        let parts: Vec<String> = [part(e, "error"), part(w, "warning")]
+            .into_iter()
+            .flatten()
+            .collect();
+        (!parts.is_empty()).then(|| (parts.join(", "), e > 0))
+    }
+
+    /// Issue row click: the op becomes current; an item issue selects just that item.
+    pub fn select_issue(&mut self, i: &Issue) {
+        if let Some(op) = i.op {
+            self.select_op(op);
+            if let Some(item) = i.item {
+                self.selection = [item].into_iter().collect();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- properties
 
     /// (count, length, segment count) etc. for the single-item properties view.
@@ -873,20 +934,6 @@ pub fn warning_text(w: &ImportWarning) -> String {
         ImportWarning::InsertNestingTooDeep { block } => {
             format!("Block \"{block}\" is nested too deep and was skipped")
         }
-    }
-}
-
-pub fn problem_text(p: &Problem) -> String {
-    match p {
-        Problem::MissingTool { op, tool } => {
-            format!("Operation {op} uses tool T{tool}, which is not in the project")
-        }
-        Problem::MissingItem { op, item } => {
-            format!("Operation {op} refers to item {item}, which does not exist")
-        }
-        Problem::DuplicateId(id) => format!("Id {id} is used more than once"),
-        Problem::DuplicateToolId(id) => format!("Tool T{id} is embedded more than once"),
-        Problem::IdNotBelowNextId(id) => format!("Id {id} is not below the project's id counter"),
     }
 }
 
@@ -932,6 +979,164 @@ pub(crate) mod tests {
             stepover_pct: 45.0,
             comment: String::new(),
         }
+    }
+
+    /// Outline circle ids with diameter `d` (mm).
+    pub fn circles(s: &AppState, d: f64) -> Vec<u64> {
+        s.project
+            .items
+            .iter()
+            .filter(|i| i.layer == "Outline")
+            .filter(|i| match &i.geom {
+                Geom::Contour(c) => c
+                    .as_circle()
+                    .is_some_and(|ci| (2.0 * ci.radius - d).abs() < 1e-6),
+                _ => false,
+            })
+            .map(|i| i.id)
+            .collect()
+    }
+
+    /// The largest closed Outline contour (the bracket's outer edge).
+    pub fn outer(s: &AppState) -> u64 {
+        s.project
+            .items
+            .iter()
+            .filter(|i| i.layer == "Outline")
+            .filter_map(|i| match &i.geom {
+                Geom::Contour(c) if c.closed => Some((i.id, c.signed_area().abs())),
+                _ => None,
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0
+    }
+
+    fn op_on(s: &mut AppState, items: Vec<u64>, kind: NewKind, tool: u32) -> u64 {
+        s.selection = items.into_iter().collect();
+        s.new_operation(kind, tool).unwrap()
+    }
+
+    fn edit_op(s: &mut AppState, id: u64, f: impl FnOnce(&mut Operation)) {
+        let mut o = s
+            .project
+            .operations
+            .iter()
+            .find(|o| o.id == id)
+            .unwrap()
+            .clone();
+        f(&mut o);
+        s.update_op(o);
+    }
+
+    /// M8 test 28: Outside (tabs), Pocket, Drill on the Bracket; returns (state, outside op).
+    pub fn bracket_clean() -> (AppState, u64) {
+        let mut s = AppState::new(None);
+        s.library.add(tool(1)).unwrap();
+        let mut t2 = tool(2);
+        t2.name = "Drill 5/8".into();
+        t2.kind = ToolKind::Drill;
+        t2.diameter = 15.875;
+        t2.flute_length = 20.0;
+        t2.plunge_feed = 100.0;
+        t2.feed = 100.0;
+        t2.rpm = 3000;
+        s.library.add(t2).unwrap();
+        s.open_cli(&bracket_path());
+        let edge = outer(&s);
+        let outside = op_on(&mut s, vec![edge], NewKind::Contour, 1);
+        edit_op(&mut s, outside, |o| {
+            o.depth = 10.0;
+            o.tabs.enabled = true;
+            o.tabs.placement = hc_project::TabPlacement::Count { count: 4 };
+            o.tabs.width = 5.0;
+            o.tabs.height = 2.0;
+        });
+        let pocket = [circles(&s, 76.2), circles(&s, 44.45)].concat();
+        let p = op_on(&mut s, pocket, NewKind::Pocket, 1);
+        edit_op(&mut s, p, |o| o.depth = 3.0);
+        let holes = circles(&s, 15.875);
+        let d = op_on(&mut s, holes, NewKind::Drill, 2);
+        edit_op(&mut s, d, |o| o.depth = 10.0);
+        s.clear_selection();
+        (s, outside)
+    }
+
+    /// M8 test 32: test 28 plus an Inside op with a Ø20 tool on a Ø15.875 hole, and rpm 0 on the Outside op.
+    /// Returns (state, inside op).
+    pub fn bracket_issues() -> (AppState, u64) {
+        let (mut s, outside) = bracket_clean();
+        let mut t3 = tool(3);
+        t3.diameter = 20.0;
+        s.library.add(t3).unwrap();
+        let hole = circles(&s, 15.875)[0];
+        let inside = op_on(&mut s, vec![hole], NewKind::Contour, 3);
+        edit_op(&mut s, inside, |o| {
+            o.kind = OpKind::Contour {
+                side: Side::Inside,
+                direction: Direction::Climb,
+            }
+        });
+        edit_op(&mut s, outside, |o| o.rpm = 0);
+        s.clear_selection();
+        s.selected_op = None;
+        (s, inside)
+    }
+
+    #[test]
+    fn m8_t28_bracket_clean() {
+        let (mut s, _) = bracket_clean();
+        s.refresh_toolpaths();
+        assert_eq!(s.project.operations.len(), 3);
+        assert!(s.toolpaths.iter().all(|(_, r)| r.is_ok()));
+        assert_eq!(s.issues, []);
+    }
+
+    #[test]
+    fn m8_t31_issues_live_and_on_open() {
+        let (mut s, outside) = bracket_clean();
+        s.refresh_toolpaths();
+        assert!(s.issues.is_empty());
+        edit_op(&mut s, outside, |o| o.rpm = 0);
+        s.refresh_toolpaths();
+        let rules: Vec<_> = s.issues.iter().map(|i| (i.rule, i.op)).collect();
+        assert_eq!(rules, [(hc_toolpath::RuleId::SpindleOff, Some(outside))]);
+        assert_eq!(
+            s.issue_text(&s.issues[0]),
+            "Warning · Contour 1 · Spindle speed is 0 (S0)"
+        );
+        assert_eq!(
+            s.op_issue_summary(outside),
+            Some(("1 warning".to_string(), false))
+        );
+
+        // a dangling item: no Warning message on open, an issue instead
+        edit_op(&mut s, outside, |o| o.items.push(999));
+        let path = scratch("m8_t31").join("dangling.hcam");
+        assert!(s.save_as(&path));
+        let mut s = AppState::new(None);
+        let n = s.messages.len();
+        assert!(s.open(&path));
+        assert_eq!(s.messages.len(), n);
+        s.refresh_toolpaths();
+        assert!(s
+            .issues
+            .iter()
+            .any(|i| i.rule == hc_toolpath::RuleId::MissingItem && i.item == Some(999)));
+        assert_eq!(
+            s.op_issue_summary(outside),
+            Some(("1 error, 1 warning".to_string(), true))
+        );
+
+        // clicking an item issue selects the op and just that item; a project issue only shows
+        let i = s.issues[0].clone();
+        s.select_issue(&i);
+        assert_eq!(s.selected_op, Some(outside));
+        assert_eq!(s.selection.iter().copied().collect::<Vec<_>>(), [999]);
+        s.clear_selection();
+        s.selected_op = None;
+        s.select_issue(&hc_toolpath::Issue { op: None, ..i });
+        assert_eq!(s.selected_op, None);
     }
 
     #[test]
@@ -1787,7 +1992,8 @@ mod edge_tests {
         let m = s.messages.last().unwrap();
         assert_eq!(m.severity, Severity::Error);
         assert!(
-            m.text.starts_with("Cannot export G-code: Operation"),
+            m.text
+                .starts_with("Cannot export G-code: Cannot export: 1 error. First: Operation"),
             "{}",
             m.text
         );

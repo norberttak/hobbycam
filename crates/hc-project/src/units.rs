@@ -24,6 +24,14 @@ pub fn from_display(v: f64, u: Units) -> f64 {
     }
 }
 
+/// Read-only length in display units: 3 decimals for mm, 4 for inch.
+pub fn fmt_len(mm: f64, u: Units) -> String {
+    match u {
+        Units::Mm => format!("{mm:.3} mm"),
+        Units::Inch => format!("{:.4} in", to_display(mm, u)),
+    }
+}
+
 fn parse_decimal(s: &str) -> Option<f64> {
     let v: f64 = s.replace(',', ".").parse().ok()?;
     v.is_finite().then_some(v)
@@ -78,5 +86,11 @@ mod tests {
         assert_eq!(parse_length("inf", Units::Mm), None);
         assert_eq!(parse_length("1 2", Units::Mm), None);
         assert_eq!(from_display(1.0, Units::Inch), 25.4);
+    }
+
+    #[test]
+    fn fmt_len_units() {
+        assert_eq!(fmt_len(15.0, Units::Mm), "15.000 mm");
+        assert_eq!(fmt_len(25.4, Units::Inch), "1.0000 in");
     }
 }

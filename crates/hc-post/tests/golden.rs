@@ -8,7 +8,7 @@ use hc_project::{
     to_display, Direction, Geom, Item, OpKind, Project, Side, Source, TabPlacement, Tool, ToolKind,
     Units, WorkOrigin,
 };
-use hc_toolpath::{generate, Move, Point3, ToolpathError};
+use hc_toolpath::{check, generate, Move, Point3, RuleId, Severity};
 use std::fs;
 use std::path::PathBuf;
 
@@ -700,32 +700,41 @@ fn t10_errors() {
         (1.0, 1.0, 600.0, 150.0, 10000),
     );
     let e = export(&bad, "x").unwrap_err();
+    let errors: Vec<_> = check(&bad, &generate(&bad))
+        .into_iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    assert_eq!(e, PostError::Blocked(errors.clone()));
     assert_eq!(
-        e,
-        PostError::OpFailed {
-            op: "Inside".into(),
-            error: ToolpathError::OffsetVanished(sq)
-        }
+        (errors.len(), errors[0].rule, errors[0].item),
+        (1, RuleId::ToolTooLarge, Some(sq))
     );
+    let inside = bad.operations[2].id;
     assert_eq!(
         e.to_string(),
-        format!("Operation \"Inside\" has an error: Tool too large for item {sq}")
+        format!(
+            "Cannot export: 1 error. First: Operation {inside}: Tool too large for the closed contour on layer 0"
+        )
     );
     bad.operations[2].enabled = false;
     assert!(export(&bad, "x").is_ok());
 
     let mut tc = example();
+    let machine_blocked = |p: &Project| match export(p, "x") {
+        Err(PostError::Blocked(v)) => v.len() == 1 && v[0].rule == RuleId::InvalidMachine,
+        _ => false,
+    };
     tc.machine.tool_change_z = 4.0;
-    assert_eq!(export(&tc, "x"), Err(PostError::ToolChangeBelowSafe));
+    assert!(machine_blocked(&tc));
+    assert_eq!(
+        export(&tc, "x").unwrap_err().to_string(),
+        "Cannot export: 1 error. First: Project: Tool change Z must be at or above safe Z"
+    );
     tc.machine.tool_change_z = f64::NAN;
-    assert_eq!(export(&tc, "x"), Err(PostError::ToolChangeBelowSafe));
+    assert!(machine_blocked(&tc));
     tc.machine.tool_change_z = 5.0;
     let files = export(&tc, "x").unwrap();
     assert!(files[0].text.ends_with("G0 Z5\nM5\nM2\n"));
-    assert_eq!(
-        PostError::ToolChangeBelowSafe.to_string(),
-        "Tool change Z must be at or above safe Z"
-    );
     assert_eq!(
         PostError::NothingToExport.to_string(),
         "Nothing to export: no enabled operations"
@@ -1028,4 +1037,15 @@ fn reader_self_check() {
         read_gcode("G1 X0 Y0 Z0")[0],
         Motion::Straight { feed: None, .. }
     ));
+}
+
+/// M8 test 30: warnings never block, Errors do.
+#[test]
+fn m8_t30_only_warnings_export() {
+    let (mut pr, it) = line_project();
+    line_op(&mut pr, it, 1, 0);
+    let rules: Vec<RuleId> = check(&pr, &generate(&pr)).iter().map(|i| i.rule).collect();
+    assert_eq!(rules, [RuleId::SpindleOff]);
+    let files = export(&pr, "s").unwrap();
+    assert!(files[0].text.contains("S0 M3\n"));
 }

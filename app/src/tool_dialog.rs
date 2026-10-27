@@ -1,8 +1,9 @@
 //! Tool library window: list, add/edit/delete, save.
 
-use crate::panels::{fmt_len, length_field, Quantity};
+use crate::panels::{length_field, Quantity};
 use crate::App;
 use eframe::egui;
+use hc_project::fmt_len;
 use hc_project::{Tool, ToolKind};
 
 #[derive(Default)]

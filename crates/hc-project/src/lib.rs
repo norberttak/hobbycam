@@ -11,7 +11,7 @@ pub use project::{
     Side, Source, Stock, TabPlacement, Tabs, WorkOrigin,
 };
 pub use tool::{default_library_path, Tool, ToolKind, ToolLibrary};
-pub use units::{from_display, parse_length, to_display, Units};
+pub use units::{fmt_len, from_display, parse_length, to_display, Units};
 
 use std::fmt;
 
