@@ -7,7 +7,9 @@ const BUNDLE_ID: &str = "io.github.norberttak.hobbycam";
 
 fn read(rel: &str) -> String {
     let p = Path::new(ROOT).join(rel);
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    let s = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    // Windows checkouts may convert to CRLF
+    s.replace("\r\n", "\n")
 }
 
 /// The `<string>`/`<true/>`… element that follows `<key>{key}</key>` in a plist.

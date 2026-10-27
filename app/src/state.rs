@@ -1894,7 +1894,9 @@ pub(crate) mod tests {
         // the "directory" is a file, so create_dir_all fails
         std::fs::write(dir.join("cfg"), "x").unwrap();
         let mut s = AppState::new(Some(dir.join("cfg").join("tools.json")));
-        assert!(s.library_error.is_some()); // reading through a file path fails too
+        // reading through a file path fails on Unix; Windows reports NotFound, i.e. "no library yet"
+        #[cfg(unix)]
+        assert!(s.library_error.is_some());
         s.start_new_library();
         let n = s.messages.len();
         assert!(!s.library_add(tool(1)));

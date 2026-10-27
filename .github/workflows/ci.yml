@@ -35,7 +35,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - if: runner.os == 'macOS'
         run: cargo clippy -p hobbycam --all-targets --features appstore -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
 
   lint:
     runs-on: ubuntu-latest
