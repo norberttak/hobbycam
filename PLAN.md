@@ -131,10 +131,19 @@ Spec: `specs/M8.md` (`hc_toolpath::check`, one Issue list, live after every rege
 - Estimated machining time
 - **Tests:** timing of known paths, position interpolation on lines and arcs.
 
-### M10 – Drawing tools
-- Line, rectangle (incl. rounded), circle, text (Hershey single-line + TTF outline), numeric input for exact sizes
-- Move/rotate/scale/mirror, delete
-- **Tests:** generated geometry dimensions; text produces closed contours (TTF) / open strokes (Hershey).
+### M10 – Drawing tools and work origin
+Spec: `specs/M10.md`. Two parts, M10a first, each signed off on its own:
+- **M10a:** one snap engine (segment ends, contour corners, arc/circle centres, drill points; 10 px) used by every canvas tool.
+  **Set origin** tool: hover snaps with a marker + kind label, click sets the work origin, Esc cancels; stored as
+  `WorkOrigin::Point` (project format v4; v1–v3 files still load). Settings → Stock (size, thickness, origin presets or a picked point).
+  Line, rectangle (incl. rounded), circle by snapped clicks or numeric form; move/rotate/scale/mirror (numeric), delete.
+  Undo/redo of every project edit (whole-project snapshots, depth 100, one step per drag/field edit; Edit menu, Cmd/Ctrl+Z,
+  Cmd/Ctrl+Shift+Z, Ctrl+Y).
+  Test for an island sharing whole edges with its boundary (M5 ruling e).
+- **M10b:** `hc-text`: Hershey Roman Simplex single-line (open strokes) and TTF outline (Ubuntu Light, already bundled by egui,
+  `ttf-parser`); Text tool.
+- **Tests:** generated geometry dimensions; snap candidates and priority; origin shifts G-code only (checks/sim unchanged); format v4
+  migrate; undo steps, coalescing, depth and dirty state; text produces closed contours (TTF) / open strokes (Hershey).
 
 ### M11 – User documentation
 - mdBook in `docs/`: install, first project walkthrough, operations, tools, tabs, sanity messages, LinuxCNC setup notes. Screenshots from the real app.

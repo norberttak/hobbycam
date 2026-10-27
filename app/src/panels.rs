@@ -110,6 +110,7 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                     app.state.fit_pending = true;
                 }
                 ui.checkbox(&mut app.state.show_toolpaths, "Show toolpaths");
+                ui.checkbox(&mut app.state.sim_view.open, "Simulation");
             });
             ui.menu_button("Settings", |ui| {
                 ui.menu_button("Units", |ui| {
@@ -196,6 +197,120 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
             ui.label(format!("Zoom {:.0}%", s.view.zoom * 100.0));
             ui.separator();
             ui.label(format!("{} selected", s.selection.len()));
+        });
+    });
+}
+
+const SPEEDS: [f64; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+
+/// Simulation controls, readout and time per file; sits directly above the status bar.
+pub fn sim_panel(app: &mut App, ui: &mut Ui) {
+    if !app.state.sim_view.open {
+        app.state.sim_view.playing = false; // no invisible animation burning CPU
+        return;
+    }
+    egui::Panel::bottom("sim").show(ui, |ui| {
+        let s = &mut app.state;
+        let sim = match &s.sim {
+            Ok(sim) => sim,
+            Err(e) => {
+                ui.colored_label(ui.visuals().error_fg_color, e.to_string());
+                return;
+            }
+        };
+        let skipped = sim.skipped.len();
+        let warn_skipped = |ui: &mut Ui| {
+            if skipped > 0 {
+                let plural = if skipped == 1 { "" } else { "s" };
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("Not simulated: {skipped} operation{plural} with errors"),
+                );
+            }
+        };
+        if sim.steps.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("Nothing to simulate");
+                warn_skipped(ui);
+            });
+            return;
+        }
+        let total = sim.total();
+        let u = s.project.units;
+        let v = &mut s.sim_view;
+        ui.horizontal(|ui| {
+            let play = if v.playing { "Pause" } else { "Play" };
+            let play_clicked = ui.button(play).clicked();
+            if ui.button("Restart").clicked() {
+                v.t = 0.0;
+            }
+            let l = ui.label("Speed");
+            egui::ComboBox::from_id_salt("sim_speed")
+                .selected_text(format!("{}×", v.speed))
+                .show_ui(ui, |ui| {
+                    for sp in SPEEDS {
+                        ui.selectable_value(&mut v.speed, sp, format!("{sp}×"));
+                    }
+                })
+                .response
+                .labelled_by(l.id);
+            let l = ui.label("Time");
+            let r = ui
+                .add(
+                    egui::Slider::new(&mut v.t, 0.0..=total)
+                        .custom_formatter(|t, _| hc_sim::fmt_duration(t)),
+                )
+                .labelled_by(l.id);
+            if r.dragged() || r.changed() {
+                v.playing = false;
+            }
+            if play_clicked {
+                v.toggle(total);
+            }
+            let t = v.t;
+            let Some(i) = sim.step_at(t) else { return };
+            let st = &sim.steps[i];
+            let op = s
+                .project
+                .operations
+                .iter()
+                .find(|o| o.id == st.op)
+                .map_or(String::new(), |o| o.name.clone());
+            let tool = s
+                .project
+                .tools
+                .iter()
+                .find(|x| x.id == st.tool)
+                .map_or(format!("T{}", st.tool), |x| format!("T{} {}", x.id, x.name));
+            let z = st.point_at(t).z;
+            let what = match st.kind {
+                hc_sim::StepKind::Rapid => "Rapid".to_string(),
+                hc_sim::StepKind::Feed => format!("F {}/min", fmt_len(st.feed, u)),
+                hc_sim::StepKind::Dwell => format!("Spindle start S{}", st.rpm),
+            };
+            ui.label(format!(
+                "{op} · {tool} · Z {} · {what} · {} / {}",
+                fmt_len(z, u),
+                hc_sim::fmt_duration(t),
+                hc_sim::fmt_duration(total)
+            ));
+        });
+        ui.horizontal(|ui| {
+            for (k, b) in sim.blocks.iter().enumerate() {
+                ui.label(format!(
+                    "File {} · T{} · {}",
+                    k + 1,
+                    b.tool,
+                    hc_sim::fmt_duration(b.t1 - b.t0)
+                ));
+                ui.separator();
+            }
+            ui.label(format!("Total {}", hc_sim::fmt_duration(total)))
+                .on_hover_text(format!(
+                    "Estimate: rapids at {} mm/min, no acceleration, tool changes not counted",
+                    hc_sim::DEFAULT_RAPID
+                ));
+            warn_skipped(ui);
         });
     });
 }

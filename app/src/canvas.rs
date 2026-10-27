@@ -197,6 +197,15 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
         4.0,
     ));
 
+    let sim = s
+        .sim
+        .as_ref()
+        .ok()
+        .filter(|sim| s.sim_view.open && !sim.steps.is_empty());
+    if let Some(sim) = sim {
+        sim_band(s, sim, painter, rect);
+    }
+
     // origin marker at the G-code work zero
     let o = v.world_to_screen(rect, hc_post::work_origin(&s.project));
     painter.arrow(o, Vec2::new(20.0, 0.0), Stroke::new(2.0, red));
@@ -271,6 +280,16 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     }
 
     tab_markers(s, painter, rect, dark, ui.visuals().text_color());
+    // tool marker on top
+    if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
+        let st = &sim.steps[i];
+        let c = v.world_to_screen(rect, st.point_at(s.sim_view.t).xy());
+        let r = (tool_d(s, st.tool) / 2.0 * v.zoom as f64) as f32;
+        let stroke = Stroke::new(2.0, ui.visuals().text_color());
+        painter.circle_stroke(c, r, stroke);
+        painter.line_segment([c - Vec2::new(6.0, 0.0), c + Vec2::new(6.0, 0.0)], stroke);
+        painter.line_segment([c - Vec2::new(0.0, 6.0), c + Vec2::new(0.0, 6.0)], stroke);
+    }
 
     // selection box
     if let (Some(a), Some(b)) = (app.box_start, ui.input(|i| i.pointer.latest_pos())) {
@@ -384,6 +403,61 @@ fn toolpaths(s: &AppState, painter: &Painter, rect: Rect, tol: f64, dark: bool) 
     }
 }
 
+fn tool_d(s: &AppState, id: u32) -> f64 {
+    s.project
+        .tools
+        .iter()
+        .find(|t| t.id == id)
+        .map_or(0.0, |t| t.diameter)
+}
+
+/// Opaque depth colour: (255, 210, 80) at Z 0 to (170, 40, 40) at Z = −thickness, clamped.
+fn depth_color(z: f64, thickness: f64) -> Color32 {
+    let f = if thickness > 0.0 {
+        (-z / thickness).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let mix = |a: f64, b: f64| (a + (b - a) * f).round() as u8;
+    Color32::from_rgb(mix(255.0, 170.0), mix(210.0, 40.0), mix(80.0, 40.0))
+}
+
+/// Swept band of the cutting feed moves up to `sim_view.t`: one wide line per step plus a disc at its end
+/// (round joins; egui's miter joins spike at sharp turns).
+fn sim_band(s: &AppState, sim: &hc_sim::Sim, painter: &Painter, rect: Rect) {
+    let v = &s.view;
+    let t = s.sim_view.t;
+    let tol = ARC_TOL_PX / v.zoom as f64;
+    let thickness = s.project.stock.thickness;
+    let Some(last) = sim.step_at(t) else { return };
+    // shortcut: repaints every step each frame; cache the completed steps' screen points if big pockets lag
+    for st in &sim.steps[..=last] {
+        let end = st.point_at(t);
+        let min_z = st.from.z.min(end.z);
+        if st.kind != hc_sim::StepKind::Feed || min_z >= -1e-6 || t <= st.t0 {
+            continue;
+        }
+        let pts: Vec<Point> = match st.arc {
+            None => vec![st.from.xy(), end.xy()],
+            Some((c, sweep)) => {
+                let d = st.from.xy() - c;
+                let f = ((t - st.t0) / (st.t1 - st.t0)).min(1.0);
+                tessellate_arc(c, d.length(), d.y.atan2(d.x), sweep * f, tol)
+            }
+        };
+        let d = tool_d(s, st.tool) * v.zoom as f64;
+        let col = depth_color(min_z, thickness);
+        let pts: Vec<Pos2> = pts
+            .into_iter()
+            .map(|p| v.world_to_screen(rect, p))
+            .collect();
+        if let Some(&e) = pts.last() {
+            painter.circle_filled(e, (d / 2.0) as f32, col);
+        }
+        painter.add(Shape::line(pts, Stroke::new(d.max(1.0) as f32, col)));
+    }
+}
+
 /// Tab markers of the selected op: a bar of the tab width along the edge plus a dot at the centre.
 /// The selected tab is a larger dot outlined in `outline` (the text colour), so it stands out on a selected contour.
 fn tab_markers(s: &AppState, painter: &Painter, rect: Rect, dark: bool, outline: Color32) {
@@ -415,5 +489,19 @@ fn tab_markers(s: &AppState, painter: &Painter, rect: Rect, dark: bool, outline:
                 painter.circle_filled(centre, 5.0, col);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_color_lerps_and_clamps() {
+        assert_eq!(depth_color(0.0, 10.0), Color32::from_rgb(255, 210, 80));
+        assert_eq!(depth_color(-10.0, 10.0), Color32::from_rgb(170, 40, 40));
+        assert_eq!(depth_color(-20.0, 10.0), Color32::from_rgb(170, 40, 40));
+        assert_eq!(depth_color(-5.0, 10.0), Color32::from_rgb(213, 125, 60));
+        assert_eq!(depth_color(-1.0, 0.0), Color32::from_rgb(170, 40, 40));
     }
 }

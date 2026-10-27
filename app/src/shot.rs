@@ -31,9 +31,8 @@ fn shot_bracket() {
 use state::tests::circles;
 
 /// M5 test 17. Manual check: feed vs rapid clearly different, arcs smooth, no path through islands.
-#[test]
-#[ignore]
-fn shot_toolpaths() {
+/// The M5 test 17 project: Outside, Pocket, Drill (T1 Ø6.35) and a failing Inside (T2 Ø20, selected).
+fn toolpaths_state() -> AppState {
     let mut s = AppState::new(None);
     let mut t1 = state::tests::tool(1);
     t1.diameter = 6.35;
@@ -79,7 +78,13 @@ fn shot_toolpaths() {
     s.update_op(o);
     s.clear_selection();
     s.select_op(inside); // render the op properties panel too
+    s
+}
 
+#[test]
+#[ignore]
+fn shot_toolpaths() {
+    let s = toolpaths_state();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
@@ -162,6 +167,37 @@ fn shot_issues() {
             .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
         h.run();
         assert!(h.query_by_label_contains("Issues (2)").is_some());
+        save(&mut h, name);
+    }
+}
+
+/// M9 test 18. Manual check: band as wide as the tool, pocket lighter than the through contour, tool circle at the
+/// readout's position, no tofu, the panel fits at 1280 px.
+#[test]
+#[ignore]
+fn shot_sim() {
+    for (name, theme) in [
+        ("sim", egui::Theme::Dark),
+        ("sim_light", egui::Theme::Light),
+    ] {
+        let mut s = toolpaths_state();
+        let inside = s.selected_op.unwrap();
+        s.delete_op(inside);
+        // through cut, so the contour band is darker than the 3 mm pocket; pocket first so both show at 60 %
+        let mut o = s.project.operations[0].clone();
+        o.depth = s.project.stock.thickness;
+        s.update_op(o);
+        let pocket = s.project.operations[1].id;
+        s.move_op(pocket, state::MoveDir::Up);
+        s.sim_view.open = true;
+        s.refresh_toolpaths();
+        s.sim_view.t = 0.6 * s.sim_total();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(theme)
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.run();
+        assert!(h.query_by_label_contains("Total ").is_some());
         save(&mut h, name);
     }
 }

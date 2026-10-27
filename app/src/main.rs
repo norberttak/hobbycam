@@ -74,6 +74,10 @@ impl App {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.state.refresh_toolpaths();
         let ctx = ui.ctx().clone();
+        if self.state.sim_view.playing {
+            self.state.advance(ui.input(|i| i.stable_dt) as f64);
+            ctx.request_repaint();
+        }
         let title = self.state.title();
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -87,6 +91,7 @@ impl App {
         panels::menu(self, ui);
         panels::messages(self, ui);
         panels::status_bar(self, ui);
+        panels::sim_panel(self, ui);
         panels::issues(self, ui);
         panels::left(self, ui);
         panels::right(self, ui);
@@ -396,5 +401,77 @@ mod kittest {
         h.key_press(egui::Key::Escape);
         h.run();
         assert_eq!(h.state().export_prompt, None);
+    }
+
+    /// M9 test 17.
+    #[test]
+    fn m9_t17_sim_panel() {
+        let (s, _) = state::tests::bracket_clean();
+        let mut h = harness_for(s);
+        h.run();
+        assert!(h.query_by_label("Play").is_none());
+        h.get_by_label("View").click();
+        h.run();
+        h.get_by_label("Simulation").click();
+        h.run();
+        assert!(h.state().state.sim_view.open);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        for name in ["Play", "Restart", "Speed"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        // the slider and its value field are both named "Time"
+        assert_eq!(h.query_all_by_label("Time").count(), 2);
+        assert!(h.query_by_label_contains("Total ").is_some());
+        assert!(h.query_by_label_contains("File 1 · T1 · ").is_some());
+        h.get_by_label("Play").click();
+        h.run_steps(2); // playing keeps repainting, so run() would not settle
+        assert!(h.state().state.sim_view.playing);
+        assert!(h.query_by_label("Pause").is_some());
+        h.get_by_label("Pause").click();
+        h.run();
+        assert!(!h.state().state.sim_view.playing);
+        // closing the panel while playing pauses
+        h.get_by_label("Play").click();
+        h.run_steps(2);
+        h.get_by_label("View").click();
+        h.run_steps(2);
+        h.get_by_label("Simulation").click();
+        h.run_steps(2);
+        assert!(!h.state().state.sim_view.open);
+        assert!(!h.state().state.sim_view.playing);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.state_mut().state.sim_view.open = true;
+
+        // the first cutting feed step: the plunge's midpoint is still above Z 0
+        let st = h
+            .state()
+            .state
+            .sim
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .find(|st| st.kind == hc_sim::StepKind::Feed && st.from.z < 0.0)
+            .unwrap()
+            .clone();
+        h.state_mut().state.sim_view.t = (st.t0 + st.t1) / 2.0;
+        h.run();
+        use egui_kittest::kittest::NodeT;
+        // a Label's text is its accesskit value, not its label
+        let labels: Vec<String> = h
+            .query_all_by_label_contains("mm/min")
+            .filter_map(|n| n.accesskit_node().value())
+            .collect();
+        assert!(labels.iter().any(|l| l.contains("Z -")), "{labels:?}");
+
+        let (mut s, _) = state::tests::bracket_issues();
+        s.sim_view.open = true;
+        let mut h = harness_for(s);
+        h.run();
+        assert!(h
+            .query_by_label("Not simulated: 1 operation with errors")
+            .is_some());
     }
 }

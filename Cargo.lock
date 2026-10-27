@@ -1644,6 +1644,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hc-sim"
+version = "0.1.0"
+dependencies = [
+ "hc-geom",
+ "hc-toolpath",
+]
+
+[[package]]
 name = "hc-toolpath"
 version = "0.1.0"
 dependencies = [
@@ -1675,6 +1683,7 @@ dependencies = [
  "hc-geom",
  "hc-post",
  "hc-project",
+ "hc-sim",
  "hc-toolpath",
  "rfd",
 ]

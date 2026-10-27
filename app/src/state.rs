@@ -9,6 +9,7 @@ use hc_project::{
     Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Tool,
     ToolLibrary, Units,
 };
+use hc_sim::{Sim, SimError};
 use hc_toolpath::{Issue, Toolpath, ToolpathError};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -81,6 +82,37 @@ pub fn kind_label(k: &OpKind) -> &'static str {
     }
 }
 
+/// Simulation playback; not saved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimView {
+    pub open: bool,
+    pub playing: bool,
+    /// Seconds into the job.
+    pub t: f64,
+    pub speed: f64,
+}
+
+impl Default for SimView {
+    fn default() -> SimView {
+        SimView {
+            open: false,
+            playing: false,
+            t: 0.0,
+            speed: 10.0,
+        }
+    }
+}
+
+impl SimView {
+    /// Play/Pause; play at the end (`total`) restarts from 0.
+    pub fn toggle(&mut self, total: f64) {
+        if !self.playing && self.t >= total {
+            self.t = 0.0;
+        }
+        self.playing = !self.playing;
+    }
+}
+
 pub struct AppState {
     pub project: Project,
     pub path: Option<PathBuf>,
@@ -111,6 +143,9 @@ pub struct AppState {
     pub issues: Vec<Issue>,
     /// Not saved.
     pub show_toolpaths: bool,
+    /// `hc_sim::simulate` of `toolpaths`, refreshed with them.
+    pub sim: Result<Sim, SimError>,
+    pub sim_view: SimView,
 }
 
 impl AppState {
@@ -149,6 +184,8 @@ impl AppState {
             toolpaths_for: None,
             issues: Vec::new(),
             show_toolpaths: true,
+            sim: Ok(Sim::default()),
+            sim_view: SimView::default(),
         };
         if let Some(e) = s.library_error.clone() {
             s.msg(Severity::Error, format!("Tool library: {e}"));
@@ -170,7 +207,34 @@ impl AppState {
             self.toolpaths = hc_toolpath::generate(&self.project);
             self.issues = hc_toolpath::check(&self.project, &self.toolpaths);
             self.toolpaths_for = Some(self.project.clone());
+            self.sim = hc_sim::simulate(&self.toolpaths, hc_sim::DEFAULT_RAPID);
+            self.sim_view.t = self.sim_view.t.min(self.sim_total());
         }
+    }
+
+    /// Simulated job time in seconds (0 on a sim error).
+    pub fn sim_total(&self) -> f64 {
+        self.sim.as_ref().map_or(0.0, Sim::total)
+    }
+
+    /// Moves the playback by `dt` seconds of wall time; stops at the end.
+    pub fn advance(&mut self, dt: f64) {
+        let v = &mut self.sim_view;
+        if !v.playing {
+            return;
+        }
+        // a stalled frame does not jump the tool
+        v.t += dt.min(0.1) * v.speed;
+        let total = self.sim.as_ref().map_or(0.0, Sim::total);
+        if v.t >= total {
+            v.t = total;
+            v.playing = false;
+        }
+    }
+
+    pub fn toggle_play(&mut self) {
+        let total = self.sim_total();
+        self.sim_view.toggle(total);
     }
 
     pub fn toolpath_result(&self, op: u64) -> Option<&Result<Toolpath, ToolpathError>> {
@@ -1017,7 +1081,7 @@ pub(crate) mod tests {
         s.new_operation(kind, tool).unwrap()
     }
 
-    fn edit_op(s: &mut AppState, id: u64, f: impl FnOnce(&mut Operation)) {
+    pub fn edit_op(s: &mut AppState, id: u64, f: impl FnOnce(&mut Operation)) {
         let mut o = s
             .project
             .operations
@@ -1398,7 +1462,7 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod edge_tests {
-    use super::tests::{bracket_path, scratch, tool};
+    use super::tests::{bracket_clean, bracket_path, edit_op, scratch, tool};
     use super::*;
     use hc_project::Geom;
 
@@ -2127,5 +2191,118 @@ mod edge_tests {
         let n = s.messages.len();
         assert!(s.write_gcode(&clean.join("out.ngc"), &[seg(1, 1)]));
         assert_eq!(s.messages.len(), n + 1);
+    }
+
+    /// M9 test 9 (cross-check): sim blocks == exported files, tools in file order.
+    #[test]
+    fn m9_t9_blocks_match_export() {
+        let (mut s, _) = bracket_clean();
+        let drill = s.project.operations[2].id;
+        s.move_op(drill, MoveDir::Up); // T1 Outside, T2 Drill, T1 Pocket
+        s.refresh_toolpaths();
+        let sim = s.sim.as_ref().unwrap();
+        let files = hc_post::export(&s.project, "x").unwrap();
+        assert_eq!(sim.blocks.len(), 3);
+        assert_eq!(files.len(), 3);
+        assert_eq!(
+            sim.blocks.iter().map(|b| b.tool).collect::<Vec<_>>(),
+            [1, 2, 1]
+        );
+        for (b, f) in sim.blocks.iter().zip(&files) {
+            assert!(f.suffix.ends_with(&format!("_T{}", b.tool)), "{}", f.suffix);
+        }
+    }
+
+    /// M9 test 15: timeline invariants on the M8 test 28 Bracket.
+    #[test]
+    fn m9_t15_monotonic() {
+        let (mut s, _) = bracket_clean();
+        s.refresh_toolpaths();
+        let sim = s.sim.as_ref().unwrap();
+        let starts: Vec<f64> = sim.blocks.iter().map(|b| b.t0).collect();
+        let fin = |p: &hc_toolpath::Point3| p.x.is_finite() && p.y.is_finite() && p.z.is_finite();
+        let mut prev: Option<&hc_sim::Step> = None;
+        for st in &sim.steps {
+            assert!(st.t0 <= st.t1);
+            assert!(fin(&st.from) && fin(&st.to) && st.t1.is_finite() && st.feed.is_finite());
+            let p0 = st.point_at(st.t0);
+            assert!(p0.xy().approx_eq(st.from.xy(), 1e-9) && (p0.z - st.from.z).abs() <= 1e-9);
+            if let Some(pr) = prev {
+                assert_eq!(st.t0, pr.t1);
+                let block_start = starts.contains(&st.t0) && st.kind == hc_sim::StepKind::Dwell;
+                if !block_start {
+                    assert_eq!(st.from, pr.to);
+                }
+            }
+            prev = Some(st);
+        }
+        assert!(
+            sim.total() > 0.0 && sim.total() < 36000.0,
+            "{}",
+            sim.total()
+        );
+    }
+
+    /// M9 test 16: playback state.
+    #[test]
+    fn m9_t16_app_state() {
+        let (mut s, outside) = bracket_clean();
+        s.refresh_toolpaths();
+        let total = s.sim_total();
+        assert!(!s.sim.as_ref().unwrap().steps.is_empty());
+        s.advance(0.5);
+        assert_eq!(s.sim_view.t, 0.0);
+        s.toggle_play();
+        // spec says advance(0.5) adds 5 s, which contradicts the 0.1 s clamp; the clamp wins
+        s.advance(0.05);
+        assert!((s.sim_view.t - 0.5).abs() < 1e-9);
+        s.advance(10.0);
+        assert!((s.sim_view.t - 1.5).abs() < 1e-9);
+        s.sim_view.t = total - 0.1;
+        s.advance(0.1);
+        assert_eq!((s.sim_view.t, s.sim_view.playing), (total, false));
+        s.toggle_play();
+        assert_eq!((s.sim_view.t, s.sim_view.playing), (0.0, true));
+        s.sim_view.t = total;
+        edit_op(&mut s, outside, |o| o.depth = 2.0);
+        s.refresh_toolpaths();
+        assert!(s.sim_total() < total);
+        assert_eq!(s.sim_view.t, s.sim_total());
+    }
+
+    /// M9 (verifier): the sim works in mm internally, so display units do not change the time.
+    #[test]
+    fn m9_inch_project_same_total() {
+        let (mut s, _) = bracket_clean();
+        s.refresh_toolpaths();
+        let mm = s.sim.clone().unwrap();
+        s.project.units = hc_project::Units::Inch;
+        s.refresh_toolpaths();
+        assert_eq!(s.sim.as_ref().unwrap(), &mm);
+    }
+
+    /// M9 (verifier): advance edge cases.
+    #[test]
+    fn m9_advance_edges() {
+        let (mut s, _) = bracket_clean();
+        s.refresh_toolpaths();
+        let total = s.sim_total();
+        s.toggle_play();
+        s.advance(0.0);
+        assert_eq!((s.sim_view.t, s.sim_view.playing), (0.0, true));
+        s.sim_view.speed = 100.0;
+        s.advance(f64::NAN); // f64::min ignores NaN → treated as the 0.1 s clamp
+        assert!((s.sim_view.t - 10.0).abs() < 1e-9);
+        s.sim_view.t = total;
+        s.sim_view.playing = false;
+        s.toggle_play(); // play at the end restarts
+        assert_eq!(s.sim_view.t, 0.0);
+        // empty project: total 0, play stops at once
+        let mut e = AppState::new(None);
+        e.refresh_toolpaths();
+        assert_eq!(e.sim_total(), 0.0);
+        e.toggle_play();
+        e.advance(0.05);
+        assert_eq!((e.sim_view.t, e.sim_view.playing), (0.0, false));
     }
 }
