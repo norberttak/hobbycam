@@ -933,6 +933,14 @@ fn tool_combo(ui: &mut Ui, id: &str, tool: &mut u32, tools: &[hc_project::Tool])
 }
 
 pub fn right(app: &mut App, ui: &mut Ui) {
+    let s = &app.state;
+    let drawing = !matches!(s.tool, CanvasTool::Select | CanvasTool::SetOrigin);
+    let op = s
+        .selected_op
+        .is_some_and(|id| s.project.operations.iter().any(|o| o.id == id));
+    if !drawing && !op && s.selection.is_empty() {
+        return; // nothing selected: no Properties pane
+    }
     egui::Panel::right("props")
         .default_size(260.0)
         .show(ui, |ui| {

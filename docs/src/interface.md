@@ -15,8 +15,9 @@ From top to bottom and left to right:
   - the **New operation** button.
 - **Canvas** in the middle: the drawing on a grid, the stock as a dashed rectangle, and the work origin
   as a red (X) and green (Y) arrow. Toolpaths are drawn in blue (View → Show toolpaths turns them off).
-- **Properties** on the right: the settings of the selected operation, or details and the Transform box of the
-  selected geometry, or the number form of the active drawing tool.
+- **Properties** on the right shows what you selected last: the settings of an operation (click it in the list), or
+  details and the Transform box of the geometry you clicked on the canvas, or the number form of the active drawing
+  tool. It is hidden when nothing is selected.
 - **Issues** panel at the bottom, only when a [sanity check](sanity.md) found something. Click an issue to select its
   operation and item.
 - **Status bar**: cursor position (plus "Work X … Y …" when the origin is not the drawing origin), zoom in percent,

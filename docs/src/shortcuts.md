@@ -28,7 +28,7 @@ These keys work with the mouse over the canvas and no text field active:
 | Zoom to fit | `F` |
 | Delete selection (or the selected tab) | `Del` or Backspace |
 
-`Esc` in Select mode clears the selection.
+`Esc` in Select mode clears the selection and the selected operation.
 
 ## Mouse
 
@@ -37,7 +37,7 @@ These keys work with the mouse over the canvas and no text field active:
 | Zoom at the cursor | mouse wheel, trackpad pinch, or `Cmd/Ctrl` + scroll |
 | Pan | trackpad two-finger scroll, middle-button drag, or `Space` + drag |
 | Select | click |
-| Add to / remove from selection | `Shift` + click |
+| Add to / remove from selection | `Shift` + click (keeps the selected operation) |
 | Select inside a box | drag left to right |
 | Select touching a box | drag right to left |
 | Add a tab | double-click on the contour |

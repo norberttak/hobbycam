@@ -707,14 +707,21 @@ impl AppState {
     pub fn click_select(&mut self, p: Point, tol: f64, shift: bool) {
         let hit = hit::pick(&self.project.items, |i| self.is_visible(i), p, tol);
         if shift {
+            // the op stays current, so the user can edit its geometry for "Use current selection"
             if let Some(id) = hit {
                 if !self.selection.remove(&id) {
                     self.selection.insert(id);
                 }
             }
-        } else {
-            self.selection = hit.into_iter().collect();
+            return;
         }
+        // first click of a double-click on a tab contour: keep the op so the tab markers stay
+        if hit.is_some_and(|id| self.tab_markers().iter().any(|(m, _, _)| *m == id)) {
+            return;
+        }
+        self.selection = hit.into_iter().collect();
+        self.selected_op = None;
+        self.selected_tab = None;
     }
 
     pub fn box_select(&mut self, a: Point, b: Point, shift: bool, tol: f64) {
@@ -731,6 +738,8 @@ impl AppState {
         );
         if !shift {
             self.selection.clear();
+            self.selected_op = None;
+            self.selected_tab = None;
         }
         self.selection.extend(ids);
     }
@@ -770,7 +779,7 @@ impl AppState {
         self.pending = None;
     }
 
-    /// Escape: drops a pending first point, else leaves the tool, else clears the selection.
+    /// Escape: drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
     pub fn escape(&mut self) {
         if self.pending.is_some() {
             self.pending = None;
@@ -779,6 +788,7 @@ impl AppState {
         } else {
             self.clear_selection();
             self.selected_tab = None;
+            self.selected_op = None;
         }
     }
 
@@ -876,7 +886,7 @@ impl AppState {
         Ok(self.add_geoms(vec![Geom::Contour(contour)]))
     }
 
-    /// Adds drawn geometry; the new items become the selection. Nothing (not dirty) when empty.
+    /// Adds drawn geometry; the new items become the selection (and the current thing). Nothing (not dirty) when empty.
     fn add_geoms(&mut self, geoms: Vec<Geom>) -> Vec<u64> {
         if geoms.is_empty() {
             return Vec::new();
@@ -884,6 +894,8 @@ impl AppState {
         let ids = self.project.add_drawn(geoms);
         self.items_changed();
         self.selection = ids.iter().copied().collect();
+        self.selected_op = None;
+        self.selected_tab = None;
         self.dirty = true;
         ids
     }
@@ -3360,5 +3372,155 @@ mod m10_tests {
             (f.text.as_str(), f.font, f.height),
             ("HobbyCAM", hc_text::Font::Hershey, 10.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod m13_tests {
+    use super::tests::{bracket_clean, circles, outer};
+    use super::*;
+    use hc_project::Geom;
+
+    fn on(s: &AppState, id: u64) -> Point {
+        match &s.item(id).unwrap().geom {
+            Geom::Contour(c) => c.point_at(0.0),
+            Geom::Point(p) => *p,
+        }
+    }
+
+    /// A Ø15.875 hole; the bracket has an identical duplicate on another layer, so take the one a click picks.
+    fn hole(s: &AppState) -> u64 {
+        let c = circles(s, 15.875)[0];
+        hit::pick(&s.project.items, |i| s.is_visible(i), on(s, c), 0.5).unwrap()
+    }
+
+    #[test]
+    fn m13_click_item_replaces_selected_op() {
+        let (mut s, _) = bracket_clean();
+        let pocket = s.project.operations[1].id;
+        s.select_op(pocket);
+        let hole = hole(&s);
+        s.click_select(on(&s, hole), 0.5, false);
+        assert_eq!(s.selected_op, None);
+        assert_eq!(s.selection, BTreeSet::from([hole]));
+        assert_eq!(s.selected_tab, None);
+        // click on empty canvas
+        s.select_op(pocket);
+        s.click_select(Point::new(-1000.0, -1000.0), 0.5, false);
+        assert!(s.selection.is_empty());
+        assert_eq!(s.selected_op, None);
+    }
+
+    #[test]
+    fn m13_shift_click_keeps_op_for_use_selection() {
+        let (mut s, _) = bracket_clean();
+        let pocket = s.project.operations[1].id;
+        s.select_op(pocket);
+        assert_eq!(s.selection.len(), 2);
+        let hole = hole(&s);
+        s.click_select(on(&s, hole), 0.5, true);
+        assert_eq!(s.selected_op, Some(pocket));
+        assert_eq!(s.selection.len(), 3);
+        s.use_selection(pocket);
+        assert_eq!(s.project.operations[1].items.len(), 3);
+        s.click_select(on(&s, hole), 0.5, true);
+        assert_eq!(s.selection.len(), 2);
+        assert_eq!(s.selected_op, Some(pocket));
+    }
+
+    #[test]
+    fn m13_click_on_tab_contour_keeps_op() {
+        let (mut s, outside) = bracket_clean();
+        let edge = outer(&s);
+        s.select_op(outside);
+        s.click_select(on(&s, edge), 0.5, false);
+        assert_eq!(s.selected_op, Some(outside));
+        assert_eq!(s.selection, BTreeSet::from([edge]));
+        assert!(!s.tab_markers().is_empty());
+        let hole = hole(&s);
+        s.click_select(on(&s, hole), 0.5, false);
+        assert_eq!(s.selected_op, None);
+        assert_eq!(s.selection, BTreeSet::from([hole]));
+        assert!(s.tab_markers().is_empty());
+    }
+
+    #[test]
+    fn m13_box_select_plain_clears_op_shift_keeps_it() {
+        let (mut s, outside) = bracket_clean();
+        s.select_op(outside);
+        let (a, b) = (Point::new(-1000.0, -1000.0), Point::new(1000.0, 1000.0));
+        s.box_select(a, b, true, 0.5);
+        assert_eq!(s.selected_op, Some(outside));
+        s.box_select(a, b, false, 0.5);
+        assert_eq!(s.selected_op, None);
+        assert_eq!(s.selection.len(), s.project.items.len());
+    }
+
+    #[test]
+    fn m13_drawn_shape_becomes_current() {
+        let (mut s, outside) = bracket_clean();
+        s.select_op(outside);
+        let ids = s
+            .add_shape(Shape::Circle {
+                c: Point::new(0.0, 0.0),
+                r: 5.0,
+            })
+            .unwrap();
+        assert_eq!(s.selected_op, None);
+        assert_eq!(s.selection, ids.into_iter().collect());
+    }
+
+    #[test]
+    fn m13_escape_clears_op() {
+        let (mut s, outside) = bracket_clean();
+        s.select_op(outside);
+        s.escape();
+        assert_eq!(s.selected_op, None);
+        assert!(s.selection.is_empty());
+        s.select_op(outside);
+        s.tool = CanvasTool::Line;
+        s.escape();
+        assert_eq!(s.selected_op, Some(outside));
+        s.escape();
+        assert_eq!(s.selected_op, None);
+    }
+
+    #[test]
+    fn m13_edge_shift_empty_delete_undo_issue() {
+        let (mut s, outside) = bracket_clean();
+        // Shift+click on empty canvas changes nothing
+        s.select_op(outside);
+        let before = s.selection.clone();
+        s.click_select(Point::new(-1000.0, -1000.0), 0.5, true);
+        assert_eq!(s.selected_op, Some(outside));
+        assert_eq!(s.selection, before);
+        // plain click on empty canvas while a tab op is current clears it and the markers
+        s.click_select(Point::new(-1000.0, -1000.0), 0.5, false);
+        assert_eq!(s.selected_op, None);
+        assert!(s.tab_markers().is_empty());
+        // delete the selected op
+        s.select_op(outside);
+        s.delete_op(outside);
+        assert_eq!(s.selected_op, None);
+        assert_eq!(s.selected_tab, None);
+        // undo restores the op without making it current; redo keeps nothing stale
+        if s.undo() {
+            assert!(s
+                .selected_op
+                .is_none_or(|id| s.project.operations.iter().any(|o| o.id == id)));
+            s.redo();
+            assert!(s
+                .selected_op
+                .is_none_or(|id| s.project.operations.iter().any(|o| o.id == id)));
+        }
+        // selecting an op again, then a plain click, then undo: no stale op id
+        let first = s.project.operations[0].id;
+        s.select_op(first);
+        s.click_select(Point::new(-1000.0, -1000.0), 0.5, false);
+        s.undo();
+        s.redo();
+        assert!(s
+            .selected_op
+            .is_none_or(|id| s.project.operations.iter().any(|o| o.id == id)));
     }
 }

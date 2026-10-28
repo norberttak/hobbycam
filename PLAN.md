@@ -171,6 +171,57 @@ Spec: `specs/M12.md`.
   Installer certs, provisioning profile, `productbuild` `.pkg`, upload with Transporter; listing steps; GPL/App Store note.
 - `RELEASING.md` maintainer walkthrough (repo creation and push are done by you); Download section of `docs/src/install.md`; `PRIVACY.md`.
 
+## Version 0.2.0
+
+Each milestone is on its own git branch (created from `main`) and becomes its own PR; the user reviews and merges it.
+
+Model note: coder and tester run on Sonnet, architect on Opus. Specs must be precise and explicit (exact files, functions,
+state fields, acceptance tests with concrete inputs and outputs) so the coder never has to guess.
+Docs: every milestone updates the user manual in `docs/src` where behaviour changes; `app/src/docs_check.rs` keeps the docs in
+sync (sanity rules, sidebar names/keys in `shortcuts.md`, links/images), so new sidebar buttons or shortcuts need a docs line.
+
+### M13 – Properties pane follows the last selection (bug fix)
+Spec: `specs/M13.md`. Branch `fix/properties-pane`.
+- Bug: after selecting an operation, Properties keeps showing it even when a canvas element is then selected.
+- Properties shows what was selected last (operation or canvas element); the pane is hidden when nothing is selected
+  (and no drawing tool is active).
+- Docs: `interface.md`, `operations.md` (Use current selection), `shortcuts.md` (`Esc`).
+
+### M14 – Settings window
+Branch `feature/settings-window`.
+- Units, Machine and Stock (today menu items, `app/src/panels.rs` ~line 168) move into one Settings window with sections,
+  opened from the sidebar and from the menu; room for later app preferences.
+- Docs: `interface.md`, `stock-origin.md`, `shortcuts.md` (new sidebar button), screenshots if they show the old menu.
+
+### M15 – Select, move and edit elements
+Branch `feature/edit-elements`.
+- Select and move canvas elements (drawn and imported DXF) by dragging, with snapping; one undo step per drag.
+- Properties derived from the geometry (no project format bump if possible): full circle → centre + radius; single line →
+  end points + length; axis-aligned rectangle → position + width + height (+ corner radius); anything else → position /
+  bounding box, movable. Edits are undoable.
+- Operations attached to an element follow it (item ids stay the same).
+- Docs: `drawing.md`, `interface.md`.
+
+### M16 – Round corners (fillet)
+Branch `feature/round-corners`.
+- Drawing tool with a radius parameter: click a single sharp corner, or apply to the selected contours to round every sharp corner.
+- Corners where the radius does not fit are skipped and reported (message with the count). Drawn and DXF geometry; undoable.
+- Docs: `drawing.md`, `shortcuts.md` (sidebar button / key).
+
+### M17 – Tool schematics
+Branch `feature/tool-schematics`.
+- Tool inventory dialog shows a schematic of the selected kind (flat end mill, ball end mill, V-bit, drill), annotated with the
+  form's parameters (diameter, flute length, flutes, V angle, …); drawn with the egui painter, no images.
+- Docs: `tools.md` (+ screenshot).
+
+### M18 – UI refresh
+Branch `feature/ui-refresh`.
+- Step 1, before any code: a mock-up page comparing 2–3 options (e.g. Phosphor duotone icons tinted by group with a new colour
+  scheme; a full-colour set such as Fluent UI colour icons (MIT); one more), each with light and dark palettes, licence notes
+  and the impact on self-containment. The user picks one.
+- Step 2: implement the chosen option.
+- Docs: screenshots in `docs/src/images/` regenerated (`shot_docs`), `interface.md` if names change.
+
 ## Agent workflow
 
 Three subagents live in `.claude/agents/`. The main session is the orchestrator and the only one that talks to you.

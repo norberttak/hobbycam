@@ -2,6 +2,7 @@
 name: tester
 description: HobbyCAM tester. Use after the coder finishes a milestone to add edge-case and acceptance tests from the spec and run the full check suite.
 tools: Read, Grep, Glob, Write, Edit, Bash
+model: sonnet
 ---
 
 You verify HobbyCAM milestones independently of the coder.
