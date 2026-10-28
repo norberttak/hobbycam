@@ -2,6 +2,7 @@
 # Signs target/macos/HobbyCAM.app (Developer ID, or ad-hoc without an identity), packs it into dist/*.dmg,
 # and notarizes + staples when the notary key is given.
 # Env (optional): MACOS_SIGNING_IDENTITY; NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER (all three or none, need the identity)
+# or NOTARY_PROFILE (a `xcrun notarytool store-credentials` keychain profile, for local use)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,7 +17,11 @@ if [[ ${#SET[@]} -gt 0 && ${#MISSING[@]} -gt 0 ]]; then
   exit 1
 fi
 NOTARIZE=0
-if [[ ${#SET[@]} -eq ${#NOTARY_VARS[@]} ]]; then
+if [[ -n "${NOTARY_PROFILE:-}" && ${#SET[@]} -gt 0 ]]; then
+  echo "error: set either NOTARY_PROFILE or ${NOTARY_VARS[*]}, not both" >&2
+  exit 1
+fi
+if [[ ${#SET[@]} -eq ${#NOTARY_VARS[@]} || -n "${NOTARY_PROFILE:-}" ]]; then
   [[ -n "$ID" ]] || { echo "error: notarization needs MACOS_SIGNING_IDENTITY" >&2; exit 1; }
   NOTARIZE=1
 fi
@@ -48,7 +53,11 @@ if [[ -n "$ID" ]]; then
   codesign --timestamp --sign "$ID" "$DMG"
 fi
 if [[ $NOTARIZE -eq 1 ]]; then
-  KEY=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    KEY=(--keychain-profile "$NOTARY_PROFILE")
+  else
+    KEY=(--key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+  fi
   OUT=$(xcrun notarytool submit "$DMG" "${KEY[@]}" --wait --output-format json) || true
   echo "$OUT"
   STATUS=$(plutil -extract status raw - <<<"$OUT" 2>/dev/null || echo unknown)
