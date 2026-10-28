@@ -5,7 +5,7 @@ Download the drawing: [bracket.dxf](examples/bracket.dxf). It was drawn in inche
 
 ## 1. Add two tools
 
-Open **Settings → Tool library…**, click **Add**, fill in the form and click **OK**. Repeat for T2
+Open **File → Tool library…**, click **Add**, fill in the form and click **OK**. Repeat for T2
 (see [Tools](tools.md)):
 
 | Number | Name | Type | Diameter | Flute length | Feed | Plunge feed | RPM | Depth/pass | Stepover |
@@ -19,7 +19,7 @@ A new tool starts with Stepover 40 %, so change it for T1. Use the values of you
 
 **File → Import DXF…** and pick `bracket.dxf`. A message lists what was skipped
 (dimensions, hatches and text are not geometry). The stock is fitted around the whole drawing, including the side
-view and the title block, so it is not your real blank yet. Open **Settings → Stock** and enter the blank:
+view and the title block, so it is not your real blank yet. Open **File → Settings…** and enter the blank under **Stock**:
 **Width 220 mm**, **Height 140 mm**, **X 17 mm**, **Y 19 mm** (so the bracket lies inside it) and **Thickness 10 mm**.
 Only then can the "outside the stock" check warn you about anything real.
 

@@ -237,10 +237,11 @@ fn docs_help_menu_opens_manual() {
             App::new(AppState::new(None)),
         );
     h.run();
-    // Help comes right after Settings in the menu bar
+    // Help comes right after Draw in the menu bar
     let x = |name: &str| h.get_by_label(name).rect().min.x;
-    let (settings, help) = (x("Settings"), x("Help"));
-    assert!(help > settings);
+    let (draw, help) = (x("Draw"), x("Help"));
+    assert!(help > draw);
+    assert!(h.query_by_label("Settings").is_none());
     assert!(crate::kittest::menu_q(&h, "Help", false).is_some());
     h.get_by_label("Help").click();
     h.run();

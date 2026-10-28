@@ -12,6 +12,7 @@ On macOS use **Cmd**, on Windows and Linux **Ctrl**.
 | Save as… | `Cmd/Ctrl+Shift+S` |
 | Import DXF… | `Cmd/Ctrl+I` |
 | Export G-code… | `Cmd/Ctrl+E` |
+| Settings… | `Cmd/Ctrl+,` |
 | Undo | `Cmd/Ctrl+Z` |
 | Redo | `Cmd/Ctrl+Shift+Z` or `Ctrl+Y` |
 
@@ -70,6 +71,4 @@ From top to bottom, two buttons per row:
 | Show toolpaths | – |
 | Simulation | – |
 | Tool library… | – |
-| Stock | – |
-| Machine | – |
-| Units | – |
+| Settings… | `Cmd/Ctrl+,` |

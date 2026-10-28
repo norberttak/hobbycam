@@ -2,11 +2,11 @@
 
 ## Stock
 
-**Settings → Stock** sets the block of material: **X**, **Y** (its bottom-left corner in drawing coordinates),
+The **Stock** section of the Settings window (**File → Settings…**) sets the block of material: **X**, **Y** (its bottom-left corner in drawing coordinates),
 **Width**, **Height** and **Thickness**. The first DXF import into a new project fits X, Y, Width and Height
 around the drawing; the thickness stays at 10 mm until you change it.
 
-![Settings → Stock with the origin choices](images/stock-menu.png)
+![The Settings window with the origin choices](images/settings.png)
 
 ## Work origin (XY zero)
 

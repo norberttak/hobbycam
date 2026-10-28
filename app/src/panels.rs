@@ -44,6 +44,7 @@ const SC_SAVE_AS: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::S);
 const SC_IMPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::I);
 const SC_EXPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::E);
+const SC_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Comma);
 const SC_UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Z);
 const SC_REDO: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::Z);
@@ -67,6 +68,16 @@ pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     }
     if ctx.input_mut(|i| i.consume_shortcut(&SC_EXPORT)) {
         app.export_gcode();
+    }
+    if ctx.input_mut(|i| i.consume_shortcut(&SC_SETTINGS)) {
+        app.settings_open = true;
+    }
+    // before the canvas reads Esc: closing the window must not also cancel the tool
+    if app.settings_open
+        && !app.kb_focus
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, egui::Key::Escape))
+    {
+        app.settings_open = false;
     }
     // a focused text field keeps its own undo
     if !ctx.egui_wants_keyboard_input() {
@@ -103,7 +114,10 @@ fn item(ui: &mut Ui, text: &str, sc: Option<&KeyboardShortcut>) -> bool {
     if let Some(sc) = sc {
         b = b.shortcut_text(ui.ctx().format_shortcut(sc));
     }
-    ui.add(b).clicked()
+    let r = ui.add(b);
+    // accessible name without the shortcut text
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    r.clicked()
 }
 
 /// The published user manual (docs/, deployed to GitHub Pages in M12).
@@ -132,6 +146,13 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 }
                 if item(ui, "Export G-code…", Some(&SC_EXPORT)) {
                     app.export_gcode();
+                }
+                ui.separator();
+                if item(ui, "Settings…", Some(&SC_SETTINGS)) {
+                    app.settings_open = true;
+                }
+                if item(ui, "Tool library…", None) {
+                    app.tool_dialog.open = true;
                 }
                 ui.separator();
                 if item(ui, "Quit", None) {
@@ -165,14 +186,6 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 ui.separator();
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
-            ui.menu_button("Settings", |ui| {
-                ui.menu_button("Units", |ui| units_menu(app, ui));
-                ui.menu_button("Machine", |ui| machine_menu(app, ui));
-                ui.menu_button("Stock", |ui| stock_menu(app, ui));
-                if ui.button("Tool library…").clicked() {
-                    app.tool_dialog.open = true;
-                }
-            });
             ui.menu_button("Help", |ui| {
                 if ui.button("User manual").clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(DOCS_URL));
@@ -182,7 +195,32 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn units_menu(app: &mut App, ui: &mut Ui) {
+/// Units, Machine and Stock in one window; edits apply live (undo and dirty as for any edit).
+pub fn settings_window(app: &mut App, ctx: &egui::Context) {
+    let mut open = app.settings_open;
+    if !open {
+        return;
+    }
+    egui::Window::new("Settings")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_pos(egui::pos2(400.0, 60.0))
+        .show(ctx, |ui| {
+            ui.heading("Units");
+            units_section(app, ui);
+            ui.separator();
+            ui.heading("Machine");
+            machine_section(app, ui);
+            ui.separator();
+            ui.heading("Stock");
+            stock_section(app, ui);
+        });
+    // Pick on drawing may have closed it during show
+    app.settings_open &= open;
+}
+
+fn units_section(app: &mut App, ui: &mut Ui) {
     let u = app.state.project.units;
     if ui.radio(u == Units::Mm, "mm").clicked() {
         app.state.set_units(Units::Mm);
@@ -192,7 +230,7 @@ fn units_menu(app: &mut App, ui: &mut Ui) {
     }
 }
 
-fn machine_menu(app: &mut App, ui: &mut Ui) {
+fn machine_section(app: &mut App, ui: &mut Ui) {
     let u = app.state.project.units;
     let mut m = app.state.project.machine.clone();
     egui::Grid::new("machine").show(ui, |ui| {
@@ -247,13 +285,6 @@ fn side_info(
     r.clone().on_hover_text(tip).on_disabled_hover_text(name)
 }
 
-/// A sidebar button that opens `content` (the same function as the menu) in a popup.
-fn side_menu(app: &mut App, ui: &mut Ui, glyph: &str, name: &str, content: fn(&mut App, &mut Ui)) {
-    let (r, _) = egui::containers::menu::MenuButton::from_button(side_widget(glyph, false))
-        .ui(ui, |ui| content(app, ui));
-    side_info(&r, name, None, true, None);
-}
-
 /// Gap between the two button columns and between rows.
 const SIDEBAR_GAP: f32 = 4.0;
 /// Two 40 px buttons, the gap and the panel margins (8 px each side).
@@ -277,8 +308,7 @@ enum SideAct {
     Toolpaths,
     Sim,
     Tools,
-    /// Opens a popup with the same function as the menu.
-    Menu(fn(&mut App, &mut Ui)),
+    Settings,
 }
 
 pub(crate) struct SideEntry {
@@ -412,9 +442,12 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
         ],
         vec![
             entry(icons::TOOLS, "Tool library…", None, SideAct::Tools),
-            entry(icons::STOCK, "Stock", None, SideAct::Menu(stock_menu)),
-            entry(icons::MACHINE, "Machine", None, SideAct::Menu(machine_menu)),
-            entry(icons::UNITS, "Units", None, SideAct::Menu(units_menu)),
+            entry(
+                icons::SETTINGS,
+                "Settings…",
+                sc(&SC_SETTINGS),
+                SideAct::Settings,
+            ),
         ],
     ]
 }
@@ -431,9 +464,7 @@ fn sidebar_buttons(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         for row in group.chunks(2) {
             ui.horizontal(|ui| {
                 for e in row {
-                    if let SideAct::Menu(content) = e.act {
-                        side_menu(app, ui, e.glyph, e.name, content);
-                    } else if side_button(
+                    if side_button(
                         ui,
                         e.glyph,
                         e.name,
@@ -451,7 +482,7 @@ fn sidebar_buttons(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
     }
     let s = &mut app.state;
     match clicked {
-        None | Some(SideAct::Menu(_)) => {}
+        None => {}
         Some(SideAct::Tool(t)) => s.set_tool(t),
         Some(SideAct::Fit) => s.fit_pending = true,
         Some(SideAct::Undo) => {
@@ -473,10 +504,11 @@ fn sidebar_buttons(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         Some(SideAct::Import) => app.import_dxf(),
         Some(SideAct::Export) => app.export_gcode(),
         Some(SideAct::Tools) => app.tool_dialog.open = true,
+        Some(SideAct::Settings) => app.settings_open = true,
     }
 }
 
-fn stock_menu(app: &mut App, ui: &mut Ui) {
+fn stock_section(app: &mut App, ui: &mut Ui) {
     let u = app.state.project.units;
     let mut st = app.state.project.stock.clone();
     egui::Grid::new("stock").show(ui, |ui| {
@@ -521,7 +553,7 @@ fn stock_menu(app: &mut App, ui: &mut Ui) {
     app.state.set_stock(st);
     if ui.button("Pick on drawing").clicked() {
         app.state.set_tool(CanvasTool::SetOrigin);
-        ui.close();
+        app.settings_open = false;
     }
 }
 
@@ -893,7 +925,7 @@ fn operations(app: &mut App, ui: &mut Ui) {
                 tool_combo(ui, "new_op_tool", &mut tool, &tools);
                 app.new_op = Some((kind, tool));
                 if tools.is_empty() {
-                    ui.weak("No tools: add one in Settings > Tool library…");
+                    ui.weak("No tools: add one in File > Tool library…");
                 }
                 let (k, t) = (kind, tool);
                 ui.horizontal(|ui| {
