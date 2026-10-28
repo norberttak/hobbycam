@@ -209,7 +209,7 @@ Spec: `specs/M16.md`. Branch `feature/round-corners`.
 - Docs: `drawing.md`, `shortcuts.md` (sidebar button / key).
 
 ### M17 – Tool schematics
-Branch `feature/tool-schematics`.
+Spec: `specs/M17.md`. Branch `feature/tool-schematics`.
 - Tool inventory dialog shows a schematic of the selected kind (flat end mill, ball end mill, V-bit, drill), annotated with the
   form's parameters (diameter, flute length, flutes, V angle, …); drawn with the egui painter, no images.
 - Docs: `tools.md` (+ screenshot).

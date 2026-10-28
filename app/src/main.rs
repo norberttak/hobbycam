@@ -26,6 +26,7 @@ mod shot;
 mod snap;
 mod state;
 mod tool_dialog;
+mod tool_sketch;
 mod view;
 
 use eframe::egui;
@@ -387,6 +388,49 @@ mod kittest {
         Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s))
+    }
+
+    #[test]
+    fn m17_tool_sketch() {
+        use egui_kittest::kittest::NodeT;
+        let (mut s, _) = state::tests::bracket_clean();
+        s.library_error = None;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut App| app.show(ui), App::new(s));
+        h.state_mut().tool_dialog.open = true;
+        h.run();
+        assert!(h
+            .query_all_by_label_contains("Tool sketch")
+            .next()
+            .is_none());
+        h.query_all_by_label("Edit")
+            .find(|n| n.rect().min.y > 40.0)
+            .unwrap()
+            .click();
+        h.run();
+        let (label, rect) = {
+            let n = h.get_by_label_contains("Tool sketch");
+            (n.accesskit_node().label().unwrap_or_default(), n.rect())
+        };
+        for want in ["Diameter 3.175 mm", "Flute length 12.000 mm", "Flutes 2"] {
+            assert!(label.contains(want), "{label}");
+        }
+        assert!(!label.contains("V angle"));
+        assert!(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))
+                .contains_rect(rect)
+        );
+        h.get_by_label("Type").click();
+        h.run();
+        h.get_by_label("V-bit").click();
+        h.run();
+        let n = h.get_by_label_contains("Tool sketch");
+        assert!(n
+            .accesskit_node()
+            .label()
+            .unwrap_or_default()
+            .contains("V angle 60°"));
     }
 
     /// Every non-ASCII character used in UI strings must be in egui's bundled fonts (the harness panics otherwise).

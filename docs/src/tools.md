@@ -21,6 +21,8 @@ Open **File → Tool library…** (or the wrench in the sidebar). The list shows
 | Stepover | default pocket stepover, % of the diameter |
 | Comment | free text |
 
+While you edit a tool, a sketch beside the form shows its type and which field is which: Diameter, Flute length, Flutes and (for a V-bit) V angle. The sketch is not to scale; the numbers are your values. A value that cannot be right (for example a diameter of 0) is shown in red.
+
 Click **OK** to store a tool. Changes are saved to `tools.json` at once (see [Install](install.md)).
 
 ## Library and project
