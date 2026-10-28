@@ -16,25 +16,7 @@ Overview of what the automation does:
 | `scripts/macos-appstore.sh` | local only | `dist/HobbyCAM-<V>-appstore.pkg` for the Mac App Store |
 | `scripts/make-icons.sh` | local, when the icon design changes | `app/assets/icon/*` |
 
-## 1. Create the GitHub repository (once)
-
-1. Make sure the reference screenshots of other hobby-level CAM software and your scratch drawings are not in git. This must print nothing:
-
-   ```sh
-   git ls-files images drawings
-   ```
-
-2. Create an empty **public** repository `norberttak/hobbycam` (no README, no licence, no .gitignore), either on
-   github.com → **New repository**, or with the GitHub CLI:
-
-   ```sh
-   gh repo create norberttak/hobbycam --public --source . --remote origin
-   ```
-
-   (On the web: afterwards run `git remote add origin https://github.com/norberttak/hobbycam.git`.)
-3. Push: `git push -u origin main`.
-
-## 2. Repository settings (once)
+## 1. Repository settings (once)
 
 1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
    The `docs` job deploys only on pushes to `main`; if the first push ran before Pages was enabled, re-run the CI
@@ -43,7 +25,7 @@ Overview of what the automation does:
    need it: Pages deploy, release draft).
 3. Check the first CI run is green on macOS and Windows (the Windows icon resource and static CRT are first built there).
 
-## 3. Apple Developer ID signing (once, renew when the certificate expires)
+## 2. Apple Developer ID signing (once, renew when the certificate expires)
 
 You need a paid Apple Developer Program membership.
 
@@ -84,6 +66,49 @@ You need a paid Apple Developer Program membership.
 
 Without any of the six secrets (e.g. in a fork) the release still builds: the app is ad-hoc signed and the file is named
 `…-unsigned.dmg`. With only **some** of them set the macOS job fails and lists the missing names.
+
+## 3. Sign and notarize locally on your Mac (optional)
+
+Same result as the CI job, made on your own Mac with the Developer ID certificate from step 2 in your login keychain
+(no `.p12` export needed). Useful for a first test before the secrets are in GitHub.
+
+1. Check the identity is installed and copy its 40-character hash (it avoids typing the name with accents):
+
+   ```sh
+   security find-identity -v -p codesigning
+   # 1) 6223A4…FA65 "Developer ID Application: … (TEAMID)"
+   ```
+
+2. **Notarization credentials (once).** Store them in your login keychain as a profile, so no password or key file stays
+   on disk. Either with an app-specific password (account.apple.com → Sign-In and Security → App-Specific Passwords):
+
+   ```sh
+   xcrun notarytool store-credentials hobbycam-notary --apple-id <your Apple ID email> --team-id <TEAMID>
+   ```
+
+   or with the App Store Connect API key from step 2
+   (`--key AuthKey_XXXXXXXXXX.p8 --key-id <key id> --issuer <issuer id>` instead of `--apple-id`/`--team-id`;
+   keep the `.p8` in your password manager and delete the loose file afterwards).
+3. Build, then sign, package and notarize:
+
+   ```sh
+   scripts/macos-build.sh
+   MACOS_SIGNING_IDENTITY=<hash> NOTARY_PROFILE=hobbycam-notary scripts/macos-dmg.sh
+   ```
+
+   Allow `codesign` to use the key when macOS asks (**Always Allow**). Notarization usually takes a few minutes; the
+   script then staples the ticket and checks it. On a rejection it prints Apple's log. Result:
+   `dist/HobbyCAM-<V>-macos-arm64.dmg`.
+   Leave out `NOTARY_PROFILE=…` to sign only: such a dmg still gets a Gatekeeper warning on other Macs.
+4. Check it:
+
+   ```sh
+   spctl -a -t open --context context:primary-signature -vv dist/HobbyCAM-<V>-macos-arm64.dmg
+   # expect: accepted, source=Notarized Developer ID
+   ```
+
+   Then copy it to another Mac (or download it through a browser so it gets the quarantine flag) and open it: no
+   "unidentified developer" warning.
 
 ## 4. Dry run (before every first release with new secrets)
 
