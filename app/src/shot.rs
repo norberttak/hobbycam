@@ -335,8 +335,8 @@ fn clean_bracket(name: &str) -> AppState {
     s
 }
 
-/// M10a.2 test 15. Manual check: icons crisp and legible in both themes, the selected tool clearly highlighted,
-/// disabled buttons greyed, tooltip readable.
+/// M10a.2 test 15. Manual check: white fill icons on group-coloured tiles, selected tile has the dark ring and the
+/// arrow, disabled tiles grey, tooltip readable, nothing clipped, both themes.
 #[test]
 #[ignore]
 fn shot_sidebar() {

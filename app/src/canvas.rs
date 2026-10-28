@@ -3,6 +3,7 @@
 use crate::hit::{segment_points, tessellate_arc};
 use crate::snap::SNAP_PX;
 use crate::state::{AppState, CanvasTool};
+use crate::theme::CanvasPalette;
 use crate::view::grid_step;
 use crate::{aci, App};
 use eframe::egui::{
@@ -18,8 +19,6 @@ const PICK_PX: f64 = 6.0;
 const ARC_TOL_PX: f64 = 0.25;
 const BOX_MIN_PX: f32 = 4.0;
 const WHEEL_ZOOM: f32 = 1.2;
-const SELECTED: Color32 = Color32::from_rgb(255, 140, 0);
-const SNAP: Color32 = Color32::from_rgb(0, 190, 255);
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     // Fixed id: panels appearing mid-drag (Properties on the first selection) shift auto ids and would drop the drag.
@@ -208,13 +207,13 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     let s = &app.state;
     let v = &s.view;
     let dark = ui.visuals().dark_mode;
+    let pal = crate::theme::canvas_palette(dark);
     let vis = v.visible_world(rect);
 
     // grid
     let step = grid_step(v.zoom, s.project.units, 15.0);
-    let weak = ui.visuals().widgets.noninteractive.bg_stroke.color;
-    let light = Stroke::new(1.0, weak.gamma_multiply(0.4));
-    let strong = Stroke::new(1.0, weak);
+    let light = Stroke::new(1.0, pal.grid_minor);
+    let strong = Stroke::new(1.0, pal.grid_major);
     let i0 = (vis.min.x / step).floor() as i64;
     let i1 = (vis.max.x / step).ceil() as i64;
     for i in i0..=i1 {
@@ -253,7 +252,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     .map(|p| v.world_to_screen(rect, p));
     painter.extend(Shape::dashed_line(
         &corners,
-        Stroke::new(1.0, Color32::GRAY),
+        Stroke::new(1.0, pal.muted),
         6.0,
         4.0,
     ));
@@ -284,14 +283,14 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     };
     for selected in [false, true] {
         if selected && s.show_toolpaths {
-            toolpaths(s, painter, rect, tol, dark);
+            toolpaths(s, painter, rect, tol, &pal);
         }
         for (it, b) in s.project.items.iter().zip(&s.item_bbox) {
             if selected != s.selection.contains(&it.id) || !s.is_visible(it) || !in_view(b) {
                 continue;
             }
             let stroke = if selected {
-                Stroke::new(2.5, SELECTED)
+                Stroke::new(2.5, pal.selected)
             } else {
                 let c = s
                     .project
@@ -340,10 +339,23 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
         }
     }
 
-    tab_markers(s, painter, rect, dark, ui.visuals().text_color());
+    tab_markers(
+        s,
+        painter,
+        rect,
+        dark,
+        pal.selected,
+        ui.visuals().text_color(),
+    );
     if let Some(sn) = s.moving.as_ref().and_then(|m| m.snap) {
-        crate::snap::marker(painter, v.world_to_screen(rect, sn.p), sn.kind, SNAP);
-        snap_label(painter, ui, v.world_to_screen(rect, sn.p), sn.kind.label());
+        crate::snap::marker(painter, v.world_to_screen(rect, sn.p), sn.kind, pal.snap);
+        snap_label(
+            painter,
+            ui,
+            v.world_to_screen(rect, sn.p),
+            sn.kind.label(),
+            pal.snap,
+        );
     }
     // tool marker on top
     if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
@@ -357,7 +369,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     }
 
     if s.tool != CanvasTool::Select {
-        tool_overlay(s, ui, painter, rect);
+        tool_overlay(s, ui, painter, rect, pal.snap);
     }
 
     // selection box
@@ -385,23 +397,23 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
 }
 
 /// Snap marker with its kind label and the rubber band from the pending first point.
-fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, text: &str) {
+fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, text: &str, col: Color32) {
     painter.text(
         c + Vec2::new(10.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
         text,
         egui::TextStyle::Body.resolve(ui.style()),
-        SNAP,
+        col,
     );
 }
 
-fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
+fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: Color32) {
     let v = &s.view;
     let Some(cursor) = s.cursor else { return };
     if s.tool == CanvasTool::Fillet {
         if let Some(h) = s.fillet_hover(cursor, SNAP_PX / v.zoom as f64) {
             let c = v.world_to_screen(rect, h.vertex);
-            crate::snap::marker(painter, c, crate::snap::SnapKind::Corner, SNAP);
+            crate::snap::marker(painter, c, crate::snap::SnapKind::Corner, snap_col);
             let label = match h.result {
                 Ok(Segment::Arc {
                     center,
@@ -419,7 +431,12 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
                     .into_iter()
                     .map(|p| v.world_to_screen(rect, p))
                     .collect();
-                    painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, SNAP), 5.0, 4.0));
+                    painter.extend(Shape::dashed_line(
+                        &pts,
+                        Stroke::new(1.0, snap_col),
+                        5.0,
+                        4.0,
+                    ));
                     "Round"
                 }
                 Ok(_) => "Round",
@@ -428,17 +445,17 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
                 Err(FilletSkip::TooLarge { .. }) => "Too large",
                 Err(FilletSkip::BadRadius) => "Radius?",
             };
-            snap_label(painter, ui, c, label);
+            snap_label(painter, ui, c, label, snap_col);
         }
         return;
     }
     let snap = s.snap_at(cursor, SNAP_PX / v.zoom as f64);
     let at = snap.map_or(cursor, |sn| sn.p);
-    let stroke = Stroke::new(1.0, SNAP);
+    let stroke = Stroke::new(1.0, snap_col);
     if let Some(sn) = snap {
         let c = v.world_to_screen(rect, sn.p);
-        crate::snap::marker(painter, c, sn.kind, SNAP);
-        snap_label(painter, ui, c, sn.kind.label());
+        crate::snap::marker(painter, c, sn.kind, snap_col);
+        snap_label(painter, ui, c, sn.kind.label(), snap_col);
     }
     let Some(first) = s.pending else { return };
     let world: Vec<Point> = match s.tool {
@@ -475,15 +492,10 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
 }
 
 /// Top view of the toolpaths: feed moves solid, XY rapids dashed, drills as tool circle + cross. Z is not shown.
-fn toolpaths(s: &AppState, painter: &Painter, rect: Rect, tol: f64, dark: bool) {
+fn toolpaths(s: &AppState, painter: &Painter, rect: Rect, tol: f64, pal: &CanvasPalette) {
     let v = &s.view;
-    let feed = if dark {
-        Color32::from_rgb(80, 170, 255)
-    } else {
-        Color32::from_rgb(0, 90, 210)
-    };
-    let feed_stroke = Stroke::new(1.5, feed);
-    let rapid_stroke = Stroke::new(1.0, Color32::GRAY);
+    let feed_stroke = Stroke::new(1.5, pal.feed);
+    let rapid_stroke = Stroke::new(1.0, pal.muted);
     let to_screen = |p: Point| v.world_to_screen(rect, p);
     for tp in s.toolpaths.iter().filter_map(|(_, r)| r.as_ref().ok()) {
         let tool_r = s
@@ -619,7 +631,14 @@ fn sim_band(s: &AppState, sim: &hc_sim::Sim, painter: &Painter, rect: Rect) {
 
 /// Tab markers of the selected op: a bar of the tab width along the edge plus a dot at the centre.
 /// The selected tab is a larger dot outlined in `outline` (the text colour), so it stands out on a selected contour.
-fn tab_markers(s: &AppState, painter: &Painter, rect: Rect, dark: bool, outline: Color32) {
+fn tab_markers(
+    s: &AppState,
+    painter: &Painter,
+    rect: Rect,
+    dark: bool,
+    selected_col: Color32,
+    outline: Color32,
+) {
     let teal = if dark {
         Color32::from_rgb(0, 210, 190)
     } else {
@@ -637,7 +656,7 @@ fn tab_markers(s: &AppState, painter: &Painter, rect: Rect, dark: bool, outline:
         for (i, t) in pos.iter().enumerate() {
             let at = t.rem_euclid(1.0) * l;
             let selected = s.selected_tab == Some((id, i));
-            let col = if selected { SELECTED } else { teal };
+            let col = if selected { selected_col } else { teal };
             let a = s.view.world_to_screen(rect, c.point_at(at - w / 2.0));
             let b = s.view.world_to_screen(rect, c.point_at(at + w / 2.0));
             painter.line_segment([a, b], Stroke::new(4.0, col));

@@ -215,7 +215,7 @@ Spec: `specs/M17.md`. Branch `feature/tool-schematics`.
 - Docs: `tools.md` (+ screenshot).
 
 ### M18 – UI refresh
-Branch `feature/ui-refresh`.
+Spec: `specs/M18.md` (option B3 of `specs/M18-mockup.html`). Branch `feature/ui-refresh`.
 - Step 1, before any code: a mock-up page comparing 2–3 options (e.g. Phosphor duotone icons tinted by group with a new colour
   scheme; a full-colour set such as Fluent UI colour icons (MIT); one more), each with light and dark palettes, licence notes
   and the impact on self-containment. The user picks one.

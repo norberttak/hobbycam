@@ -35,7 +35,7 @@ Maintainers: see [RELEASING.md](RELEASING.md).
 
 ## Third-party fonts
 
-- Phosphor Icons (regular, `@phosphor-icons/web` 2.1.2), MIT License, Copyright (c) 2020-2021 Phosphor Icons.
+- Phosphor Icons (fill, `@phosphor-icons/web` 2.1.2), MIT License, Copyright (c) 2020-2021 Phosphor Icons.
   See [app/assets/PHOSPHOR-LICENSE.txt](app/assets/PHOSPHOR-LICENSE.txt).
 - Hershey Roman Simplex (`futural.jhf`, single-line text), from the Usenet distribution of the Hershey Fonts.
   The Hershey Fonts were originally created by Dr. A. V. Hershey while working at the U. S. National Bureau of Standards.

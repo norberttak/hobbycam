@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HobbyCAM M18 - UI refresh mock-up</title>
+<!-- Mock-up only: icons from a pinned CDN. The app itself embeds the chosen .ttf (no runtime download). -->
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/src/duotone/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/src/bold/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/src/regular/style.css">
+<style>
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #e9ebef; color: #1f2328; }
+  header { padding: 16px 24px 8px; }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 4px 0; max-width: 1100px; }
+  .modes { position: sticky; top: 0; z-index: 5; background: #e9ebefee; padding: 8px 24px; border-bottom: 1px solid #cfd3da; }
+  .modes button { font: inherit; padding: 4px 12px; border: 1px solid #aab; background: #fff; border-radius: 6px; cursor: pointer; }
+  .modes button.on { background: #1f2328; color: #fff; }
+  section.opt { margin: 18px 24px 28px; padding: 14px 16px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px #0002; }
+  section.opt h2 { margin: 0 0 2px; font-size: 18px; }
+  section.opt > p { margin: 2px 0 10px; color: #444; }
+  .pair { display: flex; flex-wrap: wrap; gap: 16px; }
+  .pair .variant { flex: 0 0 auto; }
+  .pair .variant > .cap { font-size: 12px; color: #666; margin-bottom: 4px; }
+  body.only-light .variant.dark, body.only-dark .variant.light { display: none; }
+
+  /* ---------- mock window ---------- */
+  .win { width: 700px; height: 420px; display: flex; flex-direction: column; font-size: 12px; color: var(--text);
+         background: var(--win); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 14px #0003; }
+  .menubar { display: flex; gap: 14px; padding: 4px 10px; background: var(--win); border-bottom: 1px solid var(--border); }
+  .menubar span:first-child { font-weight: 600; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .side { width: 74px; padding: 6px 5px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+  .grp { display: grid; grid-template-columns: 30px 30px; gap: 4px; justify-content: center; }
+  .sep { height: 1px; background: var(--border); margin: 3px 2px; }
+  .btn { width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: default; position: relative; }
+  .btn.disabled { opacity: .35; }
+  .left, .props { width: 168px; padding: 6px 8px; background: var(--panel); overflow: hidden; }
+  .left { border-right: 1px solid var(--border); }
+  .props { border-left: 1px solid var(--border); }
+  .h { font-size: 14px; margin: 2px 0 4px; color: var(--head); }
+  .row { display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 3px; border-radius: 4px; white-space: nowrap; }
+  .row.sel { background: var(--rowsel); }
+  .cb { width: 11px; height: 11px; border: 1px solid var(--muted); border-radius: 2px; font-size: 9px; line-height: 10px; text-align: center; }
+  .sw { width: 9px; height: 9px; border-radius: 2px; }
+  .muted { color: var(--muted); }
+  .mini { font-size: 10px; padding: 0 5px; border-radius: 4px; background: var(--btn); color: var(--text); }
+  .gap { flex: 1; }
+  .canvas { flex: 1; background: var(--canvas); position: relative; min-width: 0; }
+  .canvas svg { width: 100%; height: 100%; display: block; }
+  .pr { display: grid; grid-template-columns: 62px 1fr; gap: 4px 6px; align-items: center; }
+  .in { background: var(--input); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; height: 16px; line-height: 16px; white-space: nowrap; overflow: hidden; }
+  .status { display: flex; gap: 0; padding: 3px 10px; border-top: 1px solid var(--border); background: var(--win); color: var(--muted); }
+  .status span { padding: 0 10px; border-right: 1px solid var(--border); }
+  .status span:first-child { padding-left: 0; }
+
+  /* ---------- option A: duotone tinted by group ---------- */
+  .optA .btn { color: var(--g); }
+  .optA .btn:hover { background: var(--btnhover); }
+  .optA .btn.selected { background: color-mix(in srgb, var(--g) 18%, transparent); box-shadow: inset 0 0 0 1.5px var(--g); }
+
+  /* ---------- option B: colour tiles ---------- */
+  .optB .btn { background: var(--g); color: #fff; font-size: 17px; }
+  .optB .btn:hover { filter: brightness(1.12); }
+  .optB .btn.selected { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+  .optB .btn.disabled { opacity: 1; background: var(--btn); color: var(--muted); }
+  /* B variants: stronger selected state */
+  .optB1 .btn.selected { background: var(--panel); color: var(--g); box-shadow: inset 0 0 0 3px var(--g), 0 2px 6px rgba(0,0,0,.28); }
+  .optB2 .btn { background: color-mix(in srgb, var(--g) 24%, var(--panel)); color: var(--g); }
+  .optB2 .btn.selected { background: var(--g); color: #fff; box-shadow: 0 0 0 2px var(--panel), 0 0 0 4.5px var(--head); transform: scale(1.06); }
+  .optB3 .btn.selected { position: relative; box-shadow: 0 0 0 2.5px var(--panel), 0 0 0 5px var(--head); }
+  .optB3 .btn.selected::after { content: ""; position: absolute; left: -9px; top: 50%; transform: translateY(-50%);
+                                border: 5px solid transparent; border-left-color: var(--head); }
+
+  /* ---------- option C: bold mono + coloured active pill + coloured headers ---------- */
+  .optC .grp { position: relative; }
+  .optC .grp::before { content: ""; position: absolute; left: -4px; top: 3px; bottom: 3px; width: 3px; border-radius: 2px; background: var(--g); }
+  .optC .btn { color: var(--text); background: var(--btn); }
+  .optC .btn:hover { background: var(--btnhover); color: var(--g); }
+  .optC .btn.selected { background: var(--g); color: #fff; }
+  .optC .h { border-left: 3px solid var(--hc); padding-left: 6px; font-weight: 600; font-size: 13px; }
+  .optC .menubar { background: var(--accent); color: var(--accent-text); border-bottom: none; }
+
+  /* ---------- legend ---------- */
+  .legend { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-top: 12px; font-size: 13px; }
+  .legend .lab { font-weight: 600; color: #333; }
+  .sws { display: flex; flex-wrap: wrap; gap: 6px; }
+  .s { display: flex; align-items: center; gap: 5px; border: 1px solid #ddd; border-radius: 5px; padding: 2px 6px 2px 2px; font-size: 11px; }
+  .s i { width: 18px; height: 18px; border-radius: 3px; border: 1px solid #0002; display: inline-block; }
+  .s code { font-size: 11px; }
+  .notes { margin: 0; padding-left: 18px; }
+  .notes li { margin: 2px 0; }
+  code { background: #f1f3f5; padding: 0 3px; border-radius: 3px; }
+  footer { margin: 0 24px 30px; color: #555; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HobbyCAM M18 - pick a look</h1>
+  <p>Three options for the new, more colourful UI. Each one is an HTML mock of the main window (same menus, sidebar buttons and groups as
+  <code>app/src/panels.rs</code> <code>sidebar_groups</code>), with a light and a dark variant. Hover a sidebar button for its name.
+  State shown: <b>Select</b> tool active, <b>Show toolpaths</b> on, one shape selected (so Delete/Rotate/Flip are enabled), <b>Redo</b> disabled.</p>
+  <p>The icons here come from a pinned CDN (<code>@phosphor-icons/web@2.1.2</code>) for the mock-up only; the app would embed the
+  chosen <code>.ttf</code> with <code>include_bytes!</code> as it does today, so it stays self-contained. Text font in the mock is the browser's; the app keeps egui's default font.</p>
+</header>
+<div class="modes">Show:
+  <button data-m="both" class="on">Light + dark</button>
+  <button data-m="only-light">Light only</button>
+  <button data-m="only-dark">Dark only</button>
+</div>
+
+<div id="opts"></div>
+
+<footer>Licences: Phosphor Icons are MIT (already shipped as <code>app/assets/Phosphor.ttf</code> + <code>PHOSPHOR-LICENSE.txt</code>); every option swaps or adds a font file of the same package and release, so no new licence text is needed. No third-party CAM look is reused.</footer>
+
+<script>
+// Sidebar exactly as sidebar_groups(): [group key, [icon name, tooltip, state]]
+const GROUPS = [
+  ["draw", [["cursor","Select (Esc)","selected"],["line-segment","Line (L)"],["rectangle","Rectangle (R)"],["circle","Circle (C)"],
+            ["text-t","Text (T)"],["bezier-curve","Round corners"],["crosshair","Set origin (O)","", "view"],["corners-out","Zoom to fit (F)","", "view"]]],
+  ["edit", [["arrow-u-up-left","Undo (Cmd+Z)"],["arrow-u-up-right","Redo (Shift+Cmd+Z)","disabled"],["trash","Delete selection (Del)"],
+            ["arrow-counter-clockwise","Rotate selection"],["flip-horizontal","Flip selection horizontally"],["flip-vertical","Flip selection vertically"]]],
+  ["file", [["file-plus","New (Cmd+N)"],["folder-open","Open project... (Cmd+O)"],["floppy-disk","Save (Cmd+S)"],
+            ["file-arrow-down","Import DXF... (Cmd+I)"],["export","Export G-code... (Cmd+E)"]]],
+  ["ops",  [["path","Show toolpaths","selected"],["play","Simulation"]]],
+  ["set",  [["wrench","Tool library..."],["gear","Settings... (Cmd+,)"]]],
+];
+
+// Palettes. Legend keys first; the rest are UI-only.
+const LEGEND = [["win","window bg"],["panel","panel bg"],["accent","accent"],["sel","selection"],["snap","snap"],["tp","toolpath"],["canvas","canvas bg"],["grid","grid"]];
+const OPTIONS = [
+ { id: "A", cls: "optA", weight: "ph-duotone", title: "A. Phosphor duotone, tinted by group",
+   blurb: "Outline icons with a soft 20% fill, coloured per group (drawing blue, origin/view green, edit purple, file slate, operations orange, settings grey). Calm panels, indigo accent.",
+   pal: {
+    light: { win:"#F4F6FA", panel:"#FFFFFF", accent:"#4F46E5", sel:"#F97316", snap:"#06B6D4", tp:"#2F80ED", canvas:"#FFFFFF", grid:"#E6EBF2",
+             gridmaj:"#CBD3DE", text:"#1F2937", head:"#111827", muted:"#6B7280", border:"#DDE3EC", btn:"#EEF1F6", btnhover:"#EEF1F6", input:"#F7F8FB", rowsel:"#E0E7FF", ink:"#1F2937", accentText:"#fff",
+             g:{draw:"#2563EB",view:"#16A34A",edit:"#9333EA",file:"#475569",ops:"#EA580C",set:"#6B7280"} },
+    dark:  { win:"#1B1F27", panel:"#222833", accent:"#818CF8", sel:"#FB923C", snap:"#22D3EE", tp:"#60A5FA", canvas:"#14181F", grid:"#222A35",
+             gridmaj:"#323C4A", text:"#E5E7EB", head:"#F3F4F6", muted:"#9CA3AF", border:"#323A47", btn:"#2C3340", btnhover:"#2C3340", input:"#1A1F28", rowsel:"#312E81", ink:"#D1D5DB", accentText:"#111",
+             g:{draw:"#60A5FA",view:"#4ADE80",edit:"#C084FC",file:"#94A3B8",ops:"#FB923C",set:"#9CA3AF"} } },
+   notes: [
+    "<b>Font:</b> <code>Phosphor-Duotone.ttf</code> (568 KB, MIT) replaces <code>Phosphor.ttf</code> (489 KB): +79 KB. Same package/release.",
+    "<b>egui limitation:</b> a duotone icon is <i>two</i> glyphs (e.g. cursor = U+E1DC back layer + U+E1DD front; codepoints differ from the regular font, take them from <code>src/duotone/style.css</code>). egui has no layered glyphs, so <code>side_button</code> paints both at the same centre with <code>painter.text(c, Align2::CENTER_CENTER, back, font, col.gamma_multiply(0.2))</code>, then <code>front</code> in <code>col</code>. <code>icons.rs</code> constants become <code>(back, front)</code> pairs; the glyph test checks both.",
+    "<b>Colours:</b> group colour per <code>SideEntry</code>; selected = tinted fill + 1.5 px stroke in the group colour. Window/panel/accent via <code>Visuals</code> (<code>panel_fill</code>, <code>window_fill</code>, <code>extreme_bg_color</code>, <code>selection.bg_fill</code>, <code>widgets.*</code>) set with <code>ctx.set_visuals_of(Theme::Light/Dark, ..)</code>. Canvas consts in <code>canvas.rs</code> become a small palette picked by <code>visuals.dark_mode</code>.",
+    "<b>Effort:</b> M. <b>Risk:</b> low; tooltips/accessibility labels unchanged." ] },
+ { id: "B", cls: "optB", weight: "ph-fill", title: "B. Colour tiles",
+   blurb: "Solid white icons on rounded tiles coloured per group. The boldest option: every button is a colour block; selected = ring in the accent colour; disabled = grey tile.",
+   pal: {
+    light: { win:"#EEF1F5", panel:"#FAFBFC", accent:"#0EA5E9", sel:"#FF7A00", snap:"#00B8D9", tp:"#1D6FE0", canvas:"#FFFFFF", grid:"#E6EAF0",
+             gridmaj:"#C9D1DC", text:"#1E293B", head:"#0F172A", muted:"#64748B", border:"#D8DEE7", btn:"#E2E8F0", btnhover:"#E2E8F0", input:"#FFFFFF", rowsel:"#E0F2FE", ink:"#1E293B", accentText:"#fff",
+             g:{draw:"#3B82F6",view:"#22A06B",edit:"#8B5CF6",file:"#64748B",ops:"#F97316",set:"#71717A"} },
+    dark:  { win:"#181B21", panel:"#1F232B", accent:"#38BDF8", sel:"#FF9F43", snap:"#22D3EE", tp:"#5B9BFF", canvas:"#111418", grid:"#20252D",
+             gridmaj:"#30363F", text:"#E2E8F0", head:"#F8FAFC", muted:"#94A3B8", border:"#2E343E", btn:"#2A303A", btnhover:"#2A303A", input:"#171A20", rowsel:"#0C4A6E", ink:"#CBD5E1", accentText:"#111",
+             g:{draw:"#2563EB",view:"#15803D",edit:"#7C3AED",file:"#475569",ops:"#EA580C",set:"#52525B"} } },
+   notes: [
+    "<b>Font:</b> <code>Phosphor-Fill.ttf</code> (449 KB, MIT) replaces <code>Phosphor.ttf</code>: -40 KB. Codepoints identical to regular, so <code>icons.rs</code> constants stay.",
+    "<b>egui limitation:</b> <code>egui::Button</code> cannot draw a per-button coloured tile plus focus ring the way this needs, so <code>side_button</code> becomes a custom widget: <code>ui.allocate_exact_size(.., Sense::click())</code>, <code>painter.rect_filled(rect, 6, group_col)</code>, white glyph, ring via <code>rect_stroke</code> when selected, grey when disabled. Must keep <code>response.widget_info(..)</code> with the button name so kittest <code>query_by_label</code> tests and screen readers still work.",
+    "<b>Colours:</b> panels/accent via <code>Visuals</code> as in A; canvas palette per theme. Fill icons for line-segment / flip / corners-out look almost identical to regular, so contrast comes from the tiles.",
+    "<b>Effort:</b> M. <b>Risk:</b> 25 coloured tiles are loud next to a busy drawing; dark tiles need deeper colours for white-icon contrast (shown)." ] },
+ { id: "C", cls: "optC", weight: "ph-bold", title: "C. Bold outlines, coloured active state + coloured headers",
+   blurb: "Neutral bold icons on soft buttons; colour appears where it carries meaning: a group colour bar beside each sidebar group, the active tool/toggle filled in its group colour, coloured panel headers and a teal accent menu bar. Warm 'workshop paper' canvas.",
+   pal: {
+    light: { win:"#F6F4EF", panel:"#FCFBF8", accent:"#0F9D8A", sel:"#F59E0B", snap:"#D946EF", tp:"#2B6CDF", canvas:"#FFFDF8", grid:"#EEE8DC",
+             gridmaj:"#DCD3C2", text:"#292524", head:"#1C1917", muted:"#78716C", border:"#E2DDD3", btn:"#EFEBE4", btnhover:"#E7E1D7", input:"#FFFFFF", rowsel:"#CCF0EA", ink:"#292524", accentText:"#fff",
+             g:{draw:"#2563EB",view:"#16A34A",edit:"#9333EA",file:"#57534E",ops:"#EA580C",set:"#78716C"} },
+    dark:  { win:"#1E1E1E", panel:"#262626", accent:"#2DD4BF", sel:"#FBBF24", snap:"#F472B6", tp:"#60A5FA", canvas:"#161616", grid:"#2A2A2A",
+             gridmaj:"#3A3A3A", text:"#E7E5E4", head:"#FAFAF9", muted:"#A8A29E", border:"#3A3A3A", btn:"#303030", btnhover:"#3A3A3A", input:"#1C1C1C", rowsel:"#134E4A", ink:"#D6D3D1", accentText:"#0B2B27",
+             g:{draw:"#3B82F6",view:"#22C55E",edit:"#A855F7",file:"#78716C",ops:"#F97316",set:"#737373"} } },
+   notes: [
+    "<b>Font:</b> <code>Phosphor-Bold.ttf</code> (495 KB, MIT) replaces <code>Phosphor.ttf</code>: +7 KB. Codepoints identical to regular for all 23 icons, so <code>icons.rs</code> constants stay; only the file changes.",
+    "<b>egui:</b> no limitation; keeps the existing <code>egui::Button</code> with <code>.selected()</code>; per button <code>Button::fill(group_col)</code> + white text when selected. Group bar: one <code>painter.rect_filled</code> beside each group. Panel headers: a tiny <code>header(ui, text, col)</code> helper painting a 3 px bar left of <code>ui.heading</code> (Layers / Operations / Properties / Issues). Menu bar fill via the <code>TopBottomPanel::frame</code>.",
+    "<b>Colours:</b> <code>Visuals</code> per theme as in A; snap becomes magenta so it no longer competes with the teal accent and the blue toolpath.",
+    "<b>Effort:</b> S. <b>Risk:</b> least colourful of the three; the coloured menu bar may feel heavy (easy to drop)." ] },
+];
+
+const canvasSvg = (p, u) => `
+<svg viewBox="0 0 300 300" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <pattern id="gm${u}" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M10 0H0V10" fill="none" stroke="${p.grid}" stroke-width="1"/></pattern>
+    <pattern id="gM${u}" width="50" height="50" patternUnits="userSpaceOnUse"><rect width="50" height="50" fill="url(#gm${u})"/><path d="M50 0H0V50" fill="none" stroke="${p.gridmaj}" stroke-width="1"/></pattern>
+  </defs>
+  <rect width="300" height="300" fill="url(#gM${u})"/>
+  <!-- rapid move -->
+  <path d="M30 250 L44 74" stroke="${p.muted}" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+  <!-- contour toolpath around the plate -->
+  <rect x="44" y="74" width="212" height="152" rx="16" fill="none" stroke="${p.tp}" stroke-width="2"/>
+  <!-- selected plate + selection box -->
+  <rect x="50" y="80" width="200" height="140" rx="10" fill="none" stroke="${p.sel}" stroke-width="2.2"/>
+  <rect x="46" y="76" width="208" height="148" fill="none" stroke="${p.muted}" stroke-width="0.8" stroke-dasharray="4 3"/>
+  <!-- pocket: circle + concentric passes -->
+  <circle cx="150" cy="150" r="32" fill="none" stroke="${p.ink}" stroke-width="1.2"/>
+  ${[27,21,15,9].map(r=>`<circle cx="150" cy="150" r="${r}" fill="none" stroke="${p.tp}" stroke-width="1.4"/>`).join("")}
+  <!-- drill holes -->
+  ${[[78,108],[222,108],[78,192],[222,192]].map(([x,y])=>`<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="${p.ink}" stroke-width="1.2"/><path d="M${x-12} ${y}h24M${x} ${y-12}v24" stroke="${p.tp}" stroke-width="1"/>`).join("")}
+  <!-- unselected sketch -->
+  <rect x="70" y="240" width="90" height="30" fill="none" stroke="${p.ink}" stroke-width="1.2"/>
+  <text x="178" y="264" font-size="22" font-family="sans-serif" fill="none" stroke="${p.ink}" stroke-width="0.8">HC</text>
+  <!-- snap marker on a corner -->
+  <rect x="155" y="235" width="10" height="10" fill="none" stroke="${p.snap}" stroke-width="1.8"/>
+  <path d="M152 240h16M160 232v16" stroke="${p.snap}" stroke-width="1"/>
+  <!-- origin arrows -->
+  <path d="M30 250h34" stroke="#DC3232" stroke-width="2"/><path d="M64 250l-7 -4v8z" fill="#DC3232"/>
+  <path d="M30 250v-34" stroke="#28AA28" stroke-width="2"/><path d="M30 216l-4 7h8z" fill="#28AA28"/>
+</svg>`;
+
+function win(o, theme) {
+  const p = o.pal[theme];
+  const vars = Object.entries({win:p.win,panel:p.panel,accent:p.accent,"accent-text":p.accentText,text:p.text,head:p.head,muted:p.muted,border:p.border,
+                btn:p.btn,btnhover:p.btnhover,input:p.input,rowsel:p.rowsel,canvas:p.canvas}).map(([k,v])=>`--${k}:${v}`).join(";");
+  const side = GROUPS.map(([g, items], i) => {
+    const groupCol = p.g[g];
+    const btns = items.map(([icon, tip, st = "", sub]) =>
+      `<div class="btn ${st}" title="${tip}" style="--g:${p.g[sub || g]}"><i class="${o.weight} ph-${icon}"></i></div>`).join("");
+    return (i ? `<div class="sep"></div>` : "") + `<div class="grp" style="--g:${groupCol}">${btns}</div>`;
+  }).join("");
+  const hc = (c) => `style="--hc:${c}"`;
+  return `
+  <div class="win ${o.cls}" style="${vars}">
+    <div class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Draw</span><span>Help</span></div>
+    <div class="body">
+      <div class="side">${side}</div>
+      <div class="left">
+        <div class="h" ${hc(p.g.draw)}>Layers</div>
+        ${[["Outline",p.ink,12],["Center","#E03131",11],["Hidden","#E8B400",1],["Title",p.ink,5]].map(([n,c,k])=>
+          `<div class="row"><span class="cb">&#10003;</span><span class="sw" style="background:${c}"></span>${n}<span class="muted">(${k})</span></div>`).join("")}
+        <div class="sep" style="margin:6px 0"></div>
+        <div class="h" ${hc(p.g.ops)}>Operations</div>
+        ${[["Contour 1 · T1",1],["Pocket 1 · T1"],["Drill 1 · T2"]].map(([n,s])=>
+          `<div class="row ${s?"sel":""}"><span class="cb">&#10003;</span>${n}<span class="gap"></span><span class="mini">Up</span><span class="mini">Down</span></div>`).join("")}
+        <div style="margin-top:4px"><span class="mini">New operation</span></div>
+      </div>
+      <div class="canvas">${canvasSvg(p, o.id + theme)}</div>
+      <div class="props">
+        <div class="h" ${hc(p.accent)}>Properties</div>
+        <div class="pr">
+          <span>Name</span><span class="in">Contour 1</span>
+          <span>Enabled</span><span class="cb">&#10003;</span>
+          <span>Kind</span><span>Contour</span>
+          <span>Side</span><span class="in">Outside &#9662;</span>
+          <span>Direction</span><span class="in">Climb &#9662;</span>
+          <span>Tool</span><span class="in">T1 · 6 mm flat &#9662;</span>
+          <span>Final Z</span><span class="in">-3.00 mm</span>
+          <span>Step down</span><span class="in">1.00 mm</span>
+          <span>Feed</span><span class="in">600 mm/min</span>
+          <span>RPM</span><span class="in">12000</span>
+        </div>
+      </div>
+    </div>
+    <div class="status"><span>X 42.50 Y 18.00</span><span>Zoom 174%</span><span>1 selected</span></div>
+  </div>`;
+}
+
+const swatches = (p) => `<div class="sws">${LEGEND.map(([k,n])=>`<span class="s"><i style="background:${p[k]}"></i>${n} <code>${p[k]}</code></span>`).join("")}</div>`;
+const groupSw = (p) => `<div class="sws">${Object.entries(p.g).map(([k,v])=>`<span class="s"><i style="background:${v}"></i>${k} <code>${v}</code></span>`).join("")}</div>`;
+
+// B variants with a stronger selected state (user liked B light, selection too weak)
+{
+  const b = OPTIONS.find(o => o.id === "B");
+  const v = (id, title, blurb, note) => ({ ...b, id, cls: "optB " + "opt" + id, title, blurb,
+    notes: [note, ...b.notes.slice(0, 1)] });
+  OPTIONS.splice(OPTIONS.indexOf(b) + 1, 0,
+    v("B1", "B1. Colour tiles, selected = inverted",
+      "Unselected tiles stay solid colour. The selected tile turns white (panel colour) with the icon and a thick 3 px border in its group colour, plus a small shadow, so it reads as 'pressed out'.",
+      "<b>egui:</b> custom tile widget as in B; selected: <code>rect_filled(panel)</code> + <code>rect_stroke(3 px, group_col)</code> + icon in group colour; shadow optional (<code>egui::epaint::Shadow</code>)."),
+    v("B2", "B2. Soft tiles, selected = solid + dark ring",
+      "Unselected tiles are pastel (24% of the group colour) with a coloured icon; only the selected one is solid with a white icon, a dark ring and slightly larger. Strongest contrast, calmer sidebar.",
+      "<b>egui:</b> custom tile widget; unselected fill = group colour mixed 24% into the panel colour (<code>Color32::lerp</code>-style helper), selected = solid fill + 2.5 px dark ring, rect grown by 1 px."),
+    v("B3", "B3. Colour tiles, selected = dark ring + marker",
+      "Keeps B's solid tiles; the selected one gets a thick dark ring (text colour, not the accent) and a small arrow marker on its left, like a pointer to the active tool.",
+      "<b>egui:</b> custom tile widget as in B; selected: <code>rect_stroke</code> 2.5 px in <code>visuals.text_color()</code> with a gap, plus a small filled triangle painted left of the tile."));
+}
+
+document.getElementById("opts").innerHTML = OPTIONS.map(o => `
+<section class="opt">
+  <h2>${o.title}</h2>
+  <p>${o.blurb}</p>
+  <div class="pair">
+    <div class="variant light"><div class="cap">Light</div>${win(o,"light")}</div>
+    <div class="variant dark"><div class="cap">Dark</div>${win(o,"dark")}</div>
+  </div>
+  <div class="legend">
+    <span class="lab">Light</span>${swatches(o.pal.light)}
+    <span class="lab">Dark</span>${swatches(o.pal.dark)}
+    <span class="lab">Groups light</span>${groupSw(o.pal.light)}
+    <span class="lab">Groups dark</span>${groupSw(o.pal.dark)}
+    <span class="lab">Notes</span><ul class="notes">${o.notes.map(n=>`<li>${n}</li>`).join("")}
+      <li><b>Licence:</b> MIT (Phosphor Icons, same <code>PHOSPHOR-LICENSE.txt</code>). Origin arrows stay red/green (X/Y convention); simulation depth colours unchanged.</li></ul>
+  </div>
+</section>`).join("");
+
+document.querySelectorAll(".modes button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
+  document.body.className = b.dataset.m === "both" ? "" : b.dataset.m;
+});
+</script>
+</body>
+</html>
