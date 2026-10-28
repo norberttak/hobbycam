@@ -18,7 +18,7 @@ X1/Y1/X2/Y2 for a line; X, Y (bottom-left corner), Width, Height and **Corner ra
 (a radius above 0 gives a rounded rectangle); Center X/Y and Diameter for a circle.
 A click on the canvas fills the same fields.
 
-A drawn shape becomes a plain contour, like an imported one. You cannot edit its size later; delete it and draw it again.
+A drawn shape becomes a plain contour, like an imported one.
 
 ## Snaps
 
@@ -35,6 +35,21 @@ A small marker and a label show what it found:
 | Midpoint | triangle | middle of a segment |
 
 On very large drawings the status bar says "Intersection snaps off: drawing too large".
+
+## Moving and editing
+
+- Drag an item with the Select tool to move it (and everything else selected). The point you grab snaps to the
+  item's own corners/centres, the drop point to the snap points of other items (same markers as above). Hold
+  `Shift` while dragging to move only horizontally or vertically; `Esc` puts it back. A drag that starts on empty
+  space, or with `Shift` held, selects with a box as before.
+- Properties shows editable fields for what it recognises, drawn **and** imported: a line (X1/Y1/X2/Y2, Length;
+  the start stays put), a circle (Center X/Y, Diameter; also a DXF circle made of two half arcs), a rectangle with
+  straight sides along X and Y (X, Y = bottom-left corner, Width, Height, Corner radius; the bottom-left corner stays
+  put). Anything else (and several items) shows X/Y of its bounding box: typing a new X or Y moves it there.
+- Operations and tabs stay attached to a moved or edited item. Text is one item per stroke/letter outline: select
+  it with a box to move it.
+
+![Editing a circle in Properties](images/edit-circle.png)
 
 ## Changing the selection
 

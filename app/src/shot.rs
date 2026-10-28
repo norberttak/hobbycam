@@ -499,6 +499,13 @@ fn shot_docs() {
         assert!(h.query_by_label("New operation").is_some());
     });
 
+    let (mut s, _) = bracket_clean();
+    s.selected_op = None;
+    s.selection = [state::tests::circles(&s, 76.2)[0]].into_iter().collect();
+    run(App::new(s), "edit-circle", &|h| {
+        assert!(h.query_by_label("Diameter").is_some());
+    });
+
     let (mut s, outside) = bracket_clean();
     s.select_op(outside);
     let center = picked(&mut s);

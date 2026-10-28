@@ -21,14 +21,21 @@ const SELECTED: Color32 = Color32::from_rgb(255, 140, 0);
 const SNAP: Color32 = Color32::from_rgb(0, 190, 255);
 
 pub fn show(app: &mut App, ui: &mut Ui) {
-    let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
-    let rect = resp.rect;
+    // Fixed id: panels appearing mid-drag (Properties on the first selection) shift auto ids and would drop the drag.
+    let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    let resp = ui.interact(
+        rect,
+        egui::Id::unique("hobbycam_canvas"),
+        Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
     if app.state.fit_pending && rect.width() > 1.0 && rect.height() > 1.0 {
         let (b, s) = (app.state.items_bbox(), app.state.stock_bbox());
         app.state.view.fit(rect, &b, &s);
         app.state.fit_pending = false;
     }
+    app.canvas_rect = rect;
     input(app, ui, &resp);
     paint(app, ui, &painter.with_clip_rect(rect), rect);
 }
@@ -45,6 +52,11 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
     if resp.dragged_by(PointerButton::Middle) || (space && resp.dragged_by(PointerButton::Primary))
     {
         s.view.offset += resp.drag_delta();
+    }
+
+    // Esc cancels a drag with the pointer off the canvas too (over it, escape() below does it)
+    if hover.is_none() && s.moving.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        s.cancel_move();
     }
 
     if let Some(p) = hover {
@@ -141,10 +153,13 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
     }
     if resp.drag_started_by(PointerButton::Primary) && !space {
         let origin = ui.input(|i| i.pointer.press_origin());
-        let tab = origin.and_then(|o| s.tab_at(s.view.screen_to_world(rect, o), pick));
+        let w = origin.map(|o| s.view.screen_to_world(rect, o));
+        let tab = w.and_then(|w| s.tab_at(w, pick));
         if tab.is_some() {
             s.selected_tab = tab;
             app.tab_drag = true;
+        } else if !shift && w.is_some_and(|w| s.start_move(w, pick, SNAP_PX / zoom)) {
+            app.box_start = None;
         } else {
             app.box_start = origin;
         }
@@ -157,7 +172,15 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
             _ => app.tab_drag = false,
         }
     }
+    if s.moving.is_some() && resp.dragged_by(PointerButton::Primary) {
+        if let Some(p) = resp.interact_pointer_pos() {
+            s.drag_move(s.view.screen_to_world(rect, p), SNAP_PX / zoom, shift);
+        }
+    }
     if resp.drag_stopped() {
+        if s.moving.is_some() {
+            s.end_move();
+        }
         if let (Some(a), Some(b)) = (app.box_start.take(), resp.interact_pointer_pos()) {
             if (b - a).length() > BOX_MIN_PX {
                 let (wa, wb) = (
@@ -170,6 +193,9 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
     }
     if !resp.dragged() && !resp.drag_stopped() {
         app.box_start = None;
+        if s.moving.is_some() {
+            s.end_move();
+        }
     }
 }
 
@@ -310,6 +336,10 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     }
 
     tab_markers(s, painter, rect, dark, ui.visuals().text_color());
+    if let Some(sn) = s.moving.as_ref().and_then(|m| m.snap) {
+        crate::snap::marker(painter, v.world_to_screen(rect, sn.p), sn.kind, SNAP);
+        snap_label(painter, ui, v.world_to_screen(rect, sn.p), sn.kind);
+    }
     // tool marker on top
     if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
         let st = &sim.steps[i];
@@ -350,6 +380,16 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
 }
 
 /// Snap marker with its kind label and the rubber band from the pending first point.
+fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, kind: crate::snap::SnapKind) {
+    painter.text(
+        c + Vec2::new(10.0, -10.0),
+        egui::Align2::LEFT_BOTTOM,
+        kind.label(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        SNAP,
+    );
+}
+
 fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
     let v = &s.view;
     let Some(cursor) = s.cursor else { return };
@@ -359,13 +399,7 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
     if let Some(sn) = snap {
         let c = v.world_to_screen(rect, sn.p);
         crate::snap::marker(painter, c, sn.kind, SNAP);
-        painter.text(
-            c + Vec2::new(10.0, -10.0),
-            egui::Align2::LEFT_BOTTOM,
-            sn.kind.label(),
-            egui::TextStyle::Body.resolve(ui.style()),
-            SNAP,
-        );
+        snap_label(painter, ui, c, sn.kind);
     }
     let Some(first) = s.pending else { return };
     let world: Vec<Point> = match s.tool {

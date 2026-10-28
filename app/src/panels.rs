@@ -1,9 +1,9 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
-use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity};
+use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity, Shape};
 use crate::{aci, icons, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
-use hc_geom::Transform;
+use hc_geom::{Point, Transform};
 use hc_project::{
     fmt_len, from_display, parse_length, to_display, Direction, Geom, OpKind, Side, TabPlacement,
     Units, WorkOrigin,
@@ -17,6 +17,15 @@ pub enum Quantity {
 
 /// Length/feed `DragValue`: shows display units, accepts `1/8`, `3 mm`, …, writes mm back.
 pub fn length_field(ui: &mut Ui, mm: &mut f64, units: Units, q: Quantity) -> egui::Response {
+    length_drag(ui, mm, units, q, true)
+}
+
+/// Property field: like a length field but typed text applies on Enter / focus loss only (typing "0.5" never applies "0").
+fn prop_field(ui: &mut Ui, mm: &mut f64, units: Units) -> egui::Response {
+    length_drag(ui, mm, units, Quantity::Length, false)
+}
+
+fn length_drag(ui: &mut Ui, mm: &mut f64, units: Units, q: Quantity, live: bool) -> egui::Response {
     let mut v = to_display(*mm, units);
     let suffix = match (q, units) {
         (Quantity::Length, Units::Mm) => " mm",
@@ -29,6 +38,7 @@ pub fn length_field(ui: &mut Ui, mm: &mut f64, units: Units, q: Quantity) -> egu
             .speed(if units == Units::Mm { 0.1 } else { 0.005 })
             .max_decimals(if units == Units::Mm { 3 } else { 4 })
             .custom_parser(move |s| parse_length(s, units).map(|mm| to_display(mm, units)))
+            .update_while_editing(live)
             .suffix(suffix),
     );
     if r.changed() {
@@ -616,6 +626,14 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
             ui.label(format!("Zoom {:.0}%", s.view.zoom * 100.0));
             ui.separator();
             ui.label(format!("{} selected", s.selection.len()));
+            if let Some(m) = &s.moving {
+                ui.separator();
+                ui.label(format!(
+                    "Move X {} Y {} · Shift: straight · Esc cancels",
+                    fmt_len(m.delta.x, u),
+                    fmt_len(m.delta.y, u)
+                ));
+            }
             if let Some(h) = s.tool.hint(s.pending.is_some()) {
                 ui.separator();
                 let cap = if s.snap_cache.capped {
@@ -1281,50 +1299,142 @@ fn transform_group(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// One editable property row: label + field. The response says whether it changed / is being dragged.
+fn prop(ui: &mut Ui, label: &str, mm: &mut f64, u: Units) -> egui::Response {
+    let l = ui.label(label);
+    let r = prop_field(ui, mm, u).labelled_by(l.id);
+    ui.end_row();
+    r
+}
+
+fn prop_text(ui: &mut Ui, label: &str, text: impl Into<egui::WidgetText>) {
+    ui.label(label);
+    ui.label(text);
+    ui.end_row();
+}
+
+/// What a changed property row asks for.
+enum PropEdit {
+    Shape(u64, crate::state::Shape),
+    MoveTo(Point),
+}
+
 fn selection_props(app: &mut App, ui: &mut Ui) {
-    ui.label(format!("{} selected", app.state.selection.len()));
-    if !app.state.selection.is_empty() {
-        transform_group(app, ui);
+    let n = app.state.selection.len();
+    ui.label(format!("{n} selected"));
+    if n == 0 {
+        return;
     }
     let s = &app.state;
     let u = s.project.units;
     let len = |mm: f64| fmt_len(mm, u);
-    if s.selection.len() != 1 {
-        return;
-    }
-    let Some(it) = s.item(*s.selection.first().unwrap()) else {
-        return;
-    };
+    let mut edit: Option<(PropEdit, bool)> = None;
     egui::Grid::new("item_props").num_columns(2).show(ui, |ui| {
-        ui.label("Layer");
-        ui.label(&it.layer);
-        ui.end_row();
-        match &it.geom {
-            Geom::Point(p) => {
-                ui.label("Point");
-                ui.label(format!("{}, {}", len(p.x), len(p.y)));
-                ui.end_row();
+        let item = (n == 1)
+            .then(|| s.item(*s.selection.first().unwrap()))
+            .flatten();
+        let id = item.map(|i| i.id);
+        if let Some(it) = item {
+            prop_text(ui, "Layer", &it.layer);
+        }
+        let b = s.selection_bbox();
+        let mut min = b.min;
+        let shape = id.and_then(|id| s.item_shape(id));
+        let mut xy =
+            |ui: &mut Ui, ex: &mut Option<(PropEdit, bool)>, x_label: &str, y_label: &str| {
+                let rx = prop(ui, x_label, &mut min.x, u);
+                let ry = prop(ui, y_label, &mut min.y, u);
+                if rx.changed() || ry.changed() {
+                    *ex = Some((PropEdit::MoveTo(min), rx.dragged() || ry.dragged()));
+                }
+            };
+        match (id, shape) {
+            (Some(id), Some(Shape::Line { a, b })) => {
+                prop_text(ui, "Shape", "line");
+                let (mut p, mut q) = (a, b);
+                let mut l = a.distance(b);
+                let rs = [
+                    prop(ui, "X1", &mut p.x, u),
+                    prop(ui, "Y1", &mut p.y, u),
+                    prop(ui, "X2", &mut q.x, u),
+                    prop(ui, "Y2", &mut q.y, u),
+                ];
+                let old = l;
+                let rl = prop(ui, "Length", &mut l, u);
+                if rl.changed() {
+                    let k = if l > 0.0 { l / old } else { 0.0 };
+                    q = a + (b - a) * k;
+                }
+                if rl.changed() || rs.iter().any(|r| r.changed()) {
+                    let dragged = rl.dragged() || rs.iter().any(|r| r.dragged());
+                    edit = Some((PropEdit::Shape(id, Shape::Line { a: p, b: q }), dragged));
+                }
             }
-            Geom::Contour(c) => {
-                ui.label("Shape");
-                ui.label(if c.closed { "closed" } else { "open" });
-                ui.end_row();
-                ui.label("Segments");
-                ui.label(c.segments.len().to_string());
-                ui.end_row();
-                ui.label("Length");
-                ui.label(len(c.length()));
-                ui.end_row();
-                let b = c.bbox();
-                ui.label("Size");
-                ui.label(format!("{} × {}", len(b.width()), len(b.height())));
-                ui.end_row();
-                if let Some(circle) = c.as_circle() {
-                    ui.label("Ø");
-                    ui.label(len(2.0 * circle.radius));
-                    ui.end_row();
+            (Some(id), Some(Shape::Rect { min, w, h, r })) => {
+                prop_text(ui, "Shape", "rectangle");
+                let (mut m, mut w, mut h, mut r) = (min, w, h, r);
+                let rs = [
+                    prop(ui, "X", &mut m.x, u),
+                    prop(ui, "Y", &mut m.y, u),
+                    prop(ui, "Width", &mut w, u),
+                    prop(ui, "Height", &mut h, u),
+                    prop(ui, "Corner radius", &mut r, u),
+                ];
+                if rs.iter().any(|r| r.changed()) {
+                    let dragged = rs.iter().any(|r| r.dragged());
+                    edit = Some((
+                        PropEdit::Shape(id, Shape::Rect { min: m, w, h, r }),
+                        dragged,
+                    ));
+                }
+            }
+            (Some(id), Some(Shape::Circle { c, r })) => {
+                prop_text(ui, "Shape", "circle");
+                let (mut c, mut d) = (c, 2.0 * r);
+                let rs = [
+                    prop(ui, "Center X", &mut c.x, u),
+                    prop(ui, "Center Y", &mut c.y, u),
+                    prop(ui, "Diameter", &mut d, u),
+                ];
+                prop_text(ui, "Radius", len(r));
+                if rs.iter().any(|r| r.changed()) {
+                    let dragged = rs.iter().any(|r| r.dragged());
+                    edit = Some((
+                        PropEdit::Shape(id, Shape::Circle { c, r: d / 2.0 }),
+                        dragged,
+                    ));
+                }
+            }
+            _ => {
+                if let Some(Geom::Point(_)) = item.map(|i| &i.geom) {
+                    prop_text(ui, "Shape", "point");
+                }
+                xy(ui, &mut edit, "X", "Y");
+                if let Some(Geom::Contour(c)) = item.map(|i| &i.geom) {
+                    prop_text(ui, "Shape", if c.closed { "closed" } else { "open" });
+                    prop_text(ui, "Segments", c.segments.len().to_string());
+                    prop_text(ui, "Length", len(c.length()));
+                }
+                if n > 1 || matches!(item.map(|i| &i.geom), Some(Geom::Contour(_))) {
+                    prop_text(
+                        ui,
+                        "Size",
+                        format!("{} × {}", len(b.width()), len(b.height())),
+                    );
                 }
             }
         }
     });
+    match edit {
+        Some((PropEdit::Shape(id, sh), dragged)) => {
+            if let Err(e) = app.state.edit_shape(id, sh) {
+                if !dragged {
+                    app.state.msg(Severity::Warning, e);
+                }
+            }
+        }
+        Some((PropEdit::MoveTo(p), _)) => app.state.move_selection_to(p),
+        None => {}
+    }
+    transform_group(app, ui);
 }

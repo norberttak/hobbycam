@@ -14,6 +14,8 @@ mod m10_verify;
 mod m10a2_verify;
 #[cfg(test)]
 mod m10b_verify;
+#[cfg(test)]
+mod m15_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -75,6 +77,8 @@ pub struct App {
     title: String,
     /// Screen position where a left-button box drag started.
     pub box_start: Option<egui::Pos2>,
+    /// Last canvas rect; kittests map world points to the screen.
+    pub canvas_rect: egui::Rect,
     /// A left-button drag that started on a tab marker moves that tab.
     pub tab_drag: bool,
     /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
@@ -95,6 +99,7 @@ impl App {
             allow_close: false,
             title: String::new(),
             box_start: None,
+            canvas_rect: egui::Rect::NOTHING,
             tab_drag: false,
             export_prompt: None,
             fonts_ready: false,
@@ -102,7 +107,9 @@ impl App {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        self.state.refresh_toolpaths();
+        if self.state.moving.is_none() {
+            self.state.refresh_toolpaths();
+        }
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             icons::install(&ctx);
@@ -1128,5 +1135,234 @@ mod kittest {
             xs.insert(r.min.x as i32);
         }
         assert_eq!(xs.len(), 2, "two columns: {xs:?}");
+    }
+
+    use hc_geom::Point as P;
+
+    fn to_s(h: &Harness<App>, p: P) -> egui::Pos2 {
+        h.state()
+            .state
+            .view
+            .world_to_screen(h.state().canvas_rect, p)
+    }
+
+    /// A circle (50,50) r10 with a fixed view (2 px/mm), nothing selected.
+    fn drag_harness() -> (Harness<'static, App>, u64) {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(state::Shape::Circle {
+                c: P::new(50.0, 50.0),
+                r: 10.0,
+            })
+            .unwrap()[0];
+        s.clear_selection();
+        let mut h = harness_for(s);
+        h.run();
+        let st = &mut h.state_mut().state;
+        st.fit_pending = false;
+        st.view = view::View {
+            zoom: 2.0,
+            offset: egui::vec2(100.0, 500.0),
+        };
+        h.run();
+        (h, id)
+    }
+
+    fn centre_of(h: &Harness<App>, id: u64) -> P {
+        match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.as_circle().unwrap().center,
+            hc_project::Geom::Point(_) => panic!(),
+        }
+    }
+
+    fn drag_circle(h: &mut Harness<'static, App>, esc: bool) {
+        let p = to_s(h, P::new(60.0, 50.0));
+        h.drag_at(p);
+        h.run();
+        h.hover_at(p + egui::vec2(20.0, 0.0));
+        h.run();
+        h.hover_at(p + egui::vec2(60.0, 0.0));
+        h.run();
+        if esc {
+            h.key_press(egui::Key::Escape);
+            h.run();
+        }
+        h.drop_at(p + egui::vec2(60.0, 0.0));
+        h.run();
+        h.run();
+    }
+
+    #[test]
+    fn m15_drag_moves_item() {
+        let (mut h, id) = drag_harness();
+        let n = h.state().state.undo.len();
+        drag_circle(&mut h, false);
+        let c = centre_of(&h, id);
+        assert!(c.approx_eq(P::new(80.0, 50.0), 1e-3), "{c:?}");
+        let s = &h.state().state;
+        assert_eq!(s.selection, std::collections::BTreeSet::from([id]));
+        assert_eq!(s.undo.len(), n + 1);
+        assert!(s.moving.is_none());
+    }
+
+    #[test]
+    fn m15_esc_cancels_drag() {
+        let (mut h, id) = drag_harness();
+        let n = h.state().state.undo.len();
+        drag_circle(&mut h, true);
+        assert!(centre_of(&h, id).approx_eq(P::new(50.0, 50.0), 1e-9));
+        assert_eq!(h.state().state.undo.len(), n);
+    }
+
+    #[test]
+    fn m15_click_does_not_move() {
+        let (mut h, id) = drag_harness();
+        let p = to_s(&h, P::new(60.0, 50.0));
+        h.drag_at(p);
+        h.run();
+        h.drop_at(p);
+        h.run();
+        assert!(centre_of(&h, id).approx_eq(P::new(50.0, 50.0), 1e-9));
+        assert!(h.state().state.selection.contains(&id));
+    }
+
+    fn selected(s: AppState) -> Harness<'static, App> {
+        let mut h = harness_for(s);
+        h.run();
+        h
+    }
+
+    #[test]
+    fn m15_properties_circle() {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(state::Shape::Circle {
+                c: P::new(50.0, 50.0),
+                r: 10.0,
+            })
+            .unwrap()[0];
+        let mut h = selected(s);
+        for l in ["Center X", "Center Y", "Diameter", "Radius"] {
+            assert!(h.query_by_label(l).is_some(), "{l}");
+        }
+        assert!(h.query_by_label("Width").is_none());
+        let n = h.state().state.undo.len();
+        h.get_by_label("Diameter").set_value_accesskit(16.0);
+        h.run();
+        h.run();
+        let r = |h: &Harness<App>| match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.as_circle().unwrap().radius,
+            hc_project::Geom::Point(_) => panic!(),
+        };
+        assert!((r(&h) - 8.0).abs() < 1e-9);
+        assert_eq!(h.state().state.undo.len(), n + 1);
+        h.state_mut().state.set_units(hc_project::Units::Inch);
+        h.run();
+        h.get_by_label("Diameter").set_value_accesskit(1.0);
+        h.run();
+        h.run();
+        assert!((r(&h) - 12.7).abs() < 1e-9, "{}", r(&h));
+    }
+
+    fn end_of(h: &Harness<App>, id: u64) -> P {
+        match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.segments[0].end(),
+            hc_project::Geom::Point(_) => panic!(),
+        }
+    }
+
+    #[test]
+    fn m15_properties_line() {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(state::Shape::Line {
+                a: P::new(0.0, 0.0),
+                b: P::new(3.0, 4.0),
+            })
+            .unwrap()[0];
+        let mut h = selected(s);
+        h.get_by_label("Length").set_value_accesskit(10.0);
+        h.run();
+        h.run();
+        assert!(end_of(&h, id).approx_eq(P::new(6.0, 8.0), 1e-9));
+        h.get_by_label("X2").set_value_accesskit(20.0);
+        h.run();
+        h.run();
+        let e = end_of(&h, id);
+        assert!((e.x - 20.0).abs() < 1e-9);
+        match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => assert!(c.start().approx_eq(P::new(0.0, 0.0), 1e-9)),
+            hc_project::Geom::Point(_) => panic!(),
+        }
+    }
+
+    #[test]
+    fn m15_properties_rect_invalid() {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(state::Shape::Rect {
+                min: P::new(0.0, 0.0),
+                w: 20.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap()[0];
+        let mut h = selected(s);
+        let bbox = |h: &Harness<App>| h.state().state.item_bbox[0];
+        let segs = |h: &Harness<App>| match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.segments.len(),
+            hc_project::Geom::Point(_) => panic!(),
+        };
+        h.get_by_label("Width").set_value_accesskit(30.0);
+        h.run();
+        h.run();
+        let b = bbox(&h);
+        assert!(
+            b.min.approx_eq(P::new(0.0, 0.0), 1e-9) && b.max.approx_eq(P::new(30.0, 10.0), 1e-9)
+        );
+        h.get_by_label("Corner radius").set_value_accesskit(2.0);
+        h.run();
+        h.run();
+        assert_eq!(segs(&h), 8);
+        h.get_by_label("Corner radius").set_value_accesskit(8.0);
+        h.run();
+        h.run();
+        assert_eq!(segs(&h), 8);
+        let m = h.state().state.messages.last().unwrap();
+        assert_eq!(m.severity, state::Severity::Warning);
+        assert_eq!(m.text, "Corner radius must be at most 5.000 mm");
+    }
+
+    #[test]
+    fn m15_properties_generic_and_multi() {
+        let mut s = AppState::new(None);
+        let ids = s
+            .add_shape(state::Shape::Text {
+                at: P::new(0.0, 0.0),
+                text: "HobbyCAM".into(),
+                font: hc_text::Font::Hershey,
+                height: 10.0,
+            })
+            .unwrap();
+        let n = ids.len();
+        assert!(n > 1);
+        let mut h = selected(s);
+        assert!(h.query_all_by_label(&format!("{n} selected")).count() >= 1);
+        for l in ["X", "Y", "Size", "Move"] {
+            assert!(h.query_by_label(l).is_some(), "{l}");
+        }
+        h.get_by_label("X").set_value_accesskit(100.0);
+        h.run();
+        h.run();
+        assert!((h.state().state.selection_bbox().min.x - 100.0).abs() < 1e-6);
+        let first = ids
+            .iter()
+            .copied()
+            .find(|&i| h.state().state.item_shape(i).is_none())
+            .unwrap();
+        h.state_mut().state.selection = std::collections::BTreeSet::from([first]);
+        h.run();
+        assert!(h.query_by_label("Segments").is_some() && h.query_by_label("X").is_some());
+        assert!(h.query_by_label("Radius").is_none());
     }
 }
