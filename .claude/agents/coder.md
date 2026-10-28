@@ -2,6 +2,7 @@
 name: coder
 description: HobbyCAM coder. Use to implement a milestone spec (specs/M<n>.md) or to fix failures reported by the tester or architect.
 tools: Read, Grep, Glob, Write, Edit, Bash
+model: sonnet
 ---
 
 You implement HobbyCAM (Rust workspace, see PLAN.md) from the spec in `specs/M<n>.md`.

@@ -32,7 +32,7 @@ Fix: choose a tool in the operation's Tool list, or add the tool to the library 
 
 When: the operation lists geometry that is no longer in the project.
 
-Fix: select the geometry you want and click **Use current selection**, or delete the operation.
+Fix: click the operation, `Shift`+click the geometry you want and click **Use current selection**, or delete the operation.
 
 ### Id *n* is used more than once
 
@@ -97,7 +97,7 @@ Fix: correct the named field in the operation (Depth/pass, Feed, …) or in the 
 
 When: the operation has no geometry, for example after you deleted all of it.
 
-Fix: select geometry and click **Use current selection**, or delete the operation.
+Fix: click the operation, `Shift`+click the geometry you want and click **Use current selection**, or delete the operation.
 
 ### Needs closed contours, but got *item*
 
@@ -114,7 +114,7 @@ Fix: remove the open contour from the operation, close the gap in your CAD progr
 When: the geometry does not fit the kind, for example a DXF point in a Contour, or a rectangle in a Drill
 (Drill takes only circles and points).
 
-Fix: select the right geometry and click **Use current selection**.
+Fix: click the operation, `Shift`+click the right geometry and click **Use current selection**.
 
 ### Tool too large for *item*
 

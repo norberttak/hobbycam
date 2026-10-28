@@ -422,6 +422,72 @@ mod kittest {
         }
     }
 
+    fn point_on(s: &AppState, id: u64) -> hc_geom::Point {
+        match &s.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.point_at(0.0),
+            hc_project::Geom::Point(p) => *p,
+        }
+    }
+
+    #[test]
+    fn m13_properties_pane_follows_last_selection() {
+        let (s, _) = state::tests::bracket_issues();
+        let c = state::tests::circles(&s, 15.875)[0];
+        let p = point_on(&s, c);
+        let mut h = harness_for(s);
+        h.run();
+        assert!(h.query_by_label("Properties").is_none());
+        h.get_by_label("Contour 1 · T1").click();
+        h.run();
+        assert!(h.query_by_label("Use current selection").is_some());
+        h.state_mut().state.click_select(p, 0.5, false);
+        h.run();
+        assert!(h.query_by_label("Use current selection").is_none());
+        assert!(h.query_by_label("Layer").is_some());
+        h.state_mut().state.escape();
+        h.run();
+        assert!(h.query_by_label("Properties").is_none());
+        h.state_mut().state.set_tool(state::CanvasTool::Circle);
+        h.run();
+        assert!(h.query_by_label("Properties").is_some());
+    }
+
+    #[test]
+    fn m13_user_repro_new_op_then_empty_click() {
+        let mut s = AppState::new(None);
+        s.library.add(state::tests::tool(1)).unwrap();
+        let ids = s
+            .add_shape(state::Shape::Rect {
+                min: hc_geom::Point::new(0.0, 0.0),
+                w: 20.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap();
+        let p = point_on(&s, ids[0]);
+        let far = hc_geom::Point::new(-1000.0, -1000.0);
+        let mut h = harness_for(s);
+        h.run();
+        h.state_mut().state.click_select(p, 0.5, false);
+        h.run();
+        assert!(h.query_by_label("Layer").is_some());
+        h.state_mut().state.click_select(far, 0.5, false);
+        h.run();
+        assert!(h.query_by_label("Properties").is_none());
+        h.state_mut().state.click_select(p, 0.5, false);
+        assert!(h
+            .state_mut()
+            .state
+            .new_operation(NewKind::Engrave, 1)
+            .is_some());
+        h.run();
+        assert!(h.query_by_label("Use current selection").is_some());
+        h.state_mut().state.click_select(far, 0.5, false);
+        h.run();
+        assert!(h.query_by_label("Properties").is_none());
+        assert_eq!(h.state().state.selected_op, None);
+    }
+
     fn harness_for(s: AppState) -> Harness<'static, App> {
         Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))

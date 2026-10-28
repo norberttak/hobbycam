@@ -17,6 +17,9 @@ The new operation is selected and its settings show on the right.
 | RPM | spindle speed |
 
 **Use current selection** replaces the operation's geometry with what is selected now.
+To change an operation's geometry, click the operation, then `Shift`+click (or `Shift`+drag a box) on the canvas to add
+or remove items, and click **Use current selection**. A plain click on the canvas selects geometry and shows its
+properties instead of the operation.
 **Apply tool defaults** copies Depth/pass, Feed, Plunge feed, RPM (and Stepover) from the tool again.
 
 A new operation starts with Depth equal to the tool's Depth/pass, so always set the real depth.

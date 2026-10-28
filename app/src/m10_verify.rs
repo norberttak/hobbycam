@@ -757,9 +757,10 @@ mod ui {
 
     #[test]
     fn drawing_clicks_use_the_snap_exactly() {
-        let mut h = harness(corner_state());
-        h.run();
-        h.state_mut().state.set_tool(CanvasTool::Line);
+        let mut s = corner_state();
+        // tool set before the first frame: the view fits the canvas next to the Properties pane
+        s.set_tool(CanvasTool::Line);
+        let mut h = harness(s);
         h.run();
         let a = screen_of(&mut h, p(40.0, 30.0)) + egui::vec2(-3.0, 2.0);
         click(&mut h, a);

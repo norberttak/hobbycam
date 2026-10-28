@@ -3,7 +3,11 @@
 All notable changes to HobbyCAM are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - YYYY-MM-DD
+## [0.2.0] - YYYY-MM-DD
+
+### Added
+
+## [0.1.0] - 2026-10-28
 
 First release.
 
