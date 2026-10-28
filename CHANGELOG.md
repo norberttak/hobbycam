@@ -6,6 +6,14 @@ All notable changes to HobbyCAM are listed here. The format follows
 ## [0.2.0] - YYYY-MM-DD
 
 ### Added
+- Settings window (File → Settings…, Cmd/Ctrl+, or the gear in the sidebar) with Units, Machine and Stock in one place.
+
+### Changed
+- The Settings menu is gone: Settings… and Tool library… are in the File menu; the sidebar has one Settings button.
+
+### Fixed
+- The Properties pane follows the last selection and is hidden when nothing is selected (it kept showing an
+  operation after a click on the canvas).
 
 ## [0.1.0] - 2026-10-28
 

@@ -230,7 +230,7 @@ fn screen_of(h: &mut Harness<'_, App>, w: hc_geom::Point) -> egui::Pos2 {
 #[ignore]
 fn shot_snap() {
     for (suffix, theme) in [("", egui::Theme::Dark), ("_light", egui::Theme::Light)] {
-        let names = ["snap", "set_origin", "stock_menu", "draw_preview"]
+        let names = ["snap", "set_origin", "settings", "draw_preview"]
             .map(|n| Some(format!("{n}{suffix}")));
         snap_series(
             theme,
@@ -304,9 +304,7 @@ fn snap_series(
         );
         shot(&mut h, 1);
 
-        h.get_by_label("Settings").click();
-        h.run();
-        crate::kittest::menu(&h, "Stock").hover();
+        h.state_mut().settings_open = true;
         h.run();
         assert!(h.query_by_label("Pick on drawing").is_some());
         shot(&mut h, 2);
@@ -559,13 +557,7 @@ fn shot_docs() {
 
     snap_series(
         egui::Theme::Light,
-        [
-            Some("set-origin"),
-            None,
-            Some("stock-menu"),
-            Some("drawing"),
-        ]
-        .map(|n| n.map(String::from)),
+        [Some("set-origin"), None, Some("settings"), Some("drawing")].map(|n| n.map(String::from)),
         state::tests::pocket_center,
         crate::snap::SnapKind::Center,
     );

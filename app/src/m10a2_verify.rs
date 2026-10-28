@@ -323,10 +323,10 @@ mod ui {
     }
 
     #[test]
-    fn stock_popup_sets_the_origin_like_the_menu() {
+    fn stock_section_sets_the_origin() {
         let mut h = harness(rect_state());
         h.run();
-        side(&h, "Stock").click();
+        side(&h, "Settings…").click();
         h.run();
         h.get_by_label("Stock center").click();
         h.run();
@@ -338,10 +338,10 @@ mod ui {
     }
 
     #[test]
-    fn units_popup_switches_units() {
+    fn units_section_switches_units() {
         let mut h = harness(rect_state());
         h.run();
-        side(&h, "Units").click();
+        side(&h, "Settings…").click();
         h.run();
         let inch: Vec<_> = h.query_all_by_label_contains("inch").collect();
         assert!(!inch.is_empty(), "no inch entry");

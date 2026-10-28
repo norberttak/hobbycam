@@ -1,6 +1,6 @@
 # Tools
 
-Open **Settings → Tool library…** (or the wrench in the sidebar). The list shows each tool with **Edit** and
+Open **File → Tool library…** (or the wrench in the sidebar). The list shows each tool with **Edit** and
 **Delete**; **Add** starts a new one.
 
 ![The tool library with T1 open for editing](images/tool-library.png)

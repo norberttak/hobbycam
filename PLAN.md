@@ -188,7 +188,7 @@ Spec: `specs/M13.md`. Branch `fix/properties-pane`.
 - Docs: `interface.md`, `operations.md` (Use current selection), `shortcuts.md` (`Esc`).
 
 ### M14 – Settings window
-Branch `feature/settings-window`.
+Spec: `specs/M14.md`. Branch `feature/settings-window`.
 - Units, Machine and Stock (today menu items, `app/src/panels.rs` ~line 168) move into one Settings window with sections,
   opened from the sidebar and from the menu; room for later app preferences.
 - Docs: `interface.md`, `stock-origin.md`, `shortcuts.md` (new sidebar button), screenshots if they show the old menu.

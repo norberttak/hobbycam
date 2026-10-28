@@ -64,6 +64,10 @@ pub enum Pending {
 pub struct App {
     pub state: AppState,
     pub tool_dialog: tool_dialog::ToolDialog,
+    /// The Settings window is open.
+    pub settings_open: bool,
+    /// A widget had keyboard focus at the end of the previous frame (egui drops focus on Esc before `shortcuts` runs).
+    pub kb_focus: bool,
     /// Inline "New operation" form: kind and tool id.
     pub new_op: Option<(NewKind, u32)>,
     pub pending: Option<Pending>,
@@ -84,6 +88,8 @@ impl App {
         App {
             state,
             tool_dialog: Default::default(),
+            settings_open: false,
+            kb_focus: false,
             new_op: None,
             pending: None,
             allow_close: false,
@@ -130,6 +136,8 @@ impl App {
         self.guard_modal(&ctx);
         self.export_modal(&ctx);
         tool_dialog::show(self, &ctx);
+        panels::settings_window(self, &ctx);
+        self.kb_focus = ctx.egui_wants_keyboard_input();
         // one undo step per finished gesture: a drag or typing commits on release / focus loss
         let idle = !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input();
         self.state.commit_undo(idle);
@@ -411,15 +419,145 @@ mod kittest {
         h.get_by_label("File").click();
         h.run();
         assert!(menu_q(&h, "Export G-code…", true).is_some());
-        h.key_press(egui::Key::Escape);
+        menu(&h, "Settings…").click();
         h.run();
-        h.get_by_label("Settings").click();
-        h.run();
-        menu(&h, "Machine").hover();
-        h.run();
+        assert!(h.state().settings_open);
         for name in ["Safe Z", "Clearance Z", "Tool change Z"] {
             assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
+        h.key_press(egui::Key::Escape);
+        h.run();
+    }
+
+    #[test]
+    fn m14_t1_shortcut_and_menu_open() {
+        let mut h = fresh();
+        h.state_mut().state.set_tool(state::CanvasTool::Line);
+        h.run();
+        assert!(h.query_by_label("Settings").is_none());
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+        h.run();
+        assert!(h.state().settings_open);
+        assert!(h.query_by_label("Settings").is_some());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!h.state().settings_open);
+        assert_eq!(h.state().state.tool, state::CanvasTool::Line);
+        open_menu(&mut h, "File");
+        menu(&h, "Settings…").click();
+        h.run();
+        assert!(h.state().settings_open);
+    }
+
+    #[test]
+    fn m14_t2_sections_fit() {
+        let mut h = fresh();
+        h.state_mut().state.project.stock.origin =
+            hc_project::WorkOrigin::Point(hc_geom::Point::new(0.0, 0.0));
+        h.state_mut().settings_open = true;
+        h.run();
+        for name in [
+            "Units",
+            "Machine",
+            "Stock",
+            "mm",
+            "inch",
+            "Safe Z",
+            "Clearance Z",
+            "Tool change Z",
+            "X",
+            "Y",
+            "Width",
+            "Height",
+            "Thickness",
+            "Drawing origin",
+            "Stock bottom left",
+            "Stock center",
+            "Picked point",
+            "Origin X",
+            "Origin Y",
+            "Pick on drawing",
+        ] {
+            assert!(menu_q(&h, name, false).is_some(), "{name}");
+        }
+        assert!(menu(&h, "Pick on drawing").rect().max.y < 800.0);
+        assert!(h.get_by_label("Settings").rect().min.x > 110.0);
+    }
+
+    #[test]
+    fn m14_t3_live_undo_dirty() {
+        let mut h = fresh();
+        h.run();
+        assert!(!h.state().state.dirty);
+        h.state_mut().settings_open = true;
+        h.run();
+        menu(&h, "inch").click();
+        h.run();
+        assert_eq!(h.state().state.project.units, hc_project::Units::Inch);
+        assert!(h.state().state.dirty);
+        h.run();
+        h.state_mut().state.undo();
+        h.run();
+        assert_eq!(h.state().state.project.units, hc_project::Units::Mm);
+        assert!(h.state().settings_open);
+        assert!(toggled(&menu(&h, "mm")));
+        let n = h.state().state.undo.len();
+        menu(&h, "mm").click();
+        h.run();
+        assert_eq!(h.state().state.undo.len(), n);
+    }
+
+    #[test]
+    fn m14_t4_pick_on_drawing_closes() {
+        let mut h = fresh();
+        h.state_mut().settings_open = true;
+        h.run();
+        menu(&h, "Pick on drawing").click();
+        h.run();
+        assert!(!h.state().settings_open);
+        assert_eq!(h.state().state.tool, state::CanvasTool::SetOrigin);
+    }
+
+    #[test]
+    fn m14_t5_esc_with_focus_keeps_window() {
+        let mut h = fresh();
+        h.state_mut().settings_open = true;
+        h.run();
+        menu(&h, "Safe Z").focus();
+        h.run();
+        assert!(h.ctx.egui_wants_keyboard_input());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().settings_open);
+    }
+
+    #[test]
+    fn m14_v1_esc_still_cancels_tool_when_window_closed() {
+        let mut h = fresh();
+        h.state_mut().state.set_tool(state::CanvasTool::Line);
+        h.run();
+        h.hover_at(egui::pos2(640.0, 400.0));
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!h.state().settings_open);
+        assert_ne!(h.state().state.tool, state::CanvasTool::Line);
+    }
+
+    #[test]
+    fn m14_v2_second_esc_closes_after_field_focus_dropped() {
+        let mut h = fresh();
+        h.state_mut().settings_open = true;
+        h.run();
+        menu(&h, "Safe Z").focus();
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.run();
+        assert!(h.state().settings_open);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!h.state().settings_open);
     }
 
     fn point_on(s: &AppState, id: u64) -> hc_geom::Point {
@@ -778,9 +916,9 @@ mod kittest {
         h.run();
         assert!(h.state().state.project.items.is_empty());
 
-        // Settings > Stock
-        open_menu(&mut h, "Settings");
-        menu(&h, "Stock").hover();
+        // File > Settings…
+        open_menu(&mut h, "File");
+        menu(&h, "Settings…").click();
         h.run();
         for name in ["Thickness", "Picked point", "Pick on drawing"] {
             assert!(menu_q(&h, name, false).is_some(), "{name}");
@@ -803,7 +941,7 @@ mod kittest {
         side(h, name).accesskit_node().is_disabled()
     }
 
-    const SIDEBAR: [&str; 23] = [
+    const SIDEBAR: [&str; 21] = [
         "New",
         "Open project…",
         "Save",
@@ -823,10 +961,8 @@ mod kittest {
         "Zoom to fit",
         "Show toolpaths",
         "Simulation",
-        "Units",
-        "Machine",
-        "Stock",
         "Tool library…",
+        "Settings…",
     ];
 
     /// Clicks a sidebar button after moving the pointer away, so the previous button's tooltip cannot cover it.
@@ -927,18 +1063,19 @@ mod kittest {
         click_side(&mut h, "Simulation");
         assert!(h.state().state.sim_view.open && toggled(&side(&h, "Simulation")));
 
-        // settings popups: the same fields as the menu
-        for (name, field) in [
-            ("Units", "mm"),
-            ("Machine", "Safe Z"),
-            ("Stock", "Thickness"),
-        ] {
-            click_side(&mut h, name);
-            assert!(menu_q(&h, field, false).is_some(), "{name}: {field}");
-            h.key_press(egui::Key::Escape);
-            h.run();
-            assert!(menu_q(&h, field, false).is_none(), "{name} closed");
+        // settings window; Esc closes it and leaves the tool alone
+        h.state_mut().state.set_tool(state::CanvasTool::Line);
+        h.run();
+        click_side(&mut h, "Settings…");
+        assert!(h.state().settings_open);
+        for field in ["mm", "Safe Z", "Thickness"] {
+            assert!(menu_q(&h, field, false).is_some(), "{field}");
         }
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!h.state().settings_open);
+        assert!(menu_q(&h, "Safe Z", false).is_none());
+        assert_eq!(h.state().state.tool, state::CanvasTool::Line);
         click_side(&mut h, "Tool library…");
         assert!(h.state().tool_dialog.open);
     }

@@ -4,7 +4,7 @@
 
 From top to bottom and left to right:
 
-- **Menu bar**: File, Edit, View, Draw, Settings, Help.
+- **Menu bar**: File, Edit, View, Draw, Help.
 - **Messages** under the menu: import notes, export results and errors. **Dismiss** removes one.
 - **Icon sidebar** (two columns) on the far left. It has the same commands as the menus. Hover a button to see its
   name and shortcut. Greyed buttons cannot be used right now (for example Delete with nothing selected).
@@ -22,6 +22,9 @@ From top to bottom and left to right:
   operation and item.
 - **Status bar**: cursor position (plus "Work X … Y …" when the origin is not the drawing origin), zoom in percent,
   "*n* selected", and the hint of the active tool, for example "Line: click the start point · Esc cancels".
+- **Settings** window (**File → Settings…**, `Cmd/Ctrl+,` or the gear in the sidebar): Units, Machine and Stock. Changes
+  apply at once and can be undone; close it with the X or `Esc`. In this manual **Settings → Stock** means the Stock
+  section of this window.
 
 ## Mouse
 
