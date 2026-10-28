@@ -4,7 +4,7 @@ A simple 2D CAM program for hobby 3-axis CNC milling machines.
 Import DXF drawings (AutoCAD, QCAD), pick contours, assign engrave / contour / pocket / drill
 operations and export LinuxCNC G-code.
 
-Status: first release (0.1.0) in preparation – see [PLAN.md](PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
+![main window](https://norberttak.github.io/hobbycam/images/main-window.png)
 
 ## Download
 
