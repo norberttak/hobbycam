@@ -56,6 +56,7 @@ From top to bottom, two buttons per row:
 | Rectangle | `R` |
 | Circle | `C` |
 | Text | `T` |
+| Round corners | – |
 | Set origin | `O` |
 | Zoom to fit | `F` |
 | Undo | `Cmd/Ctrl+Z` |

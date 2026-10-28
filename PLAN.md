@@ -203,7 +203,7 @@ Spec: `specs/M15.md`. Branch `feature/edit-elements`.
 - Docs: `drawing.md`, `interface.md`.
 
 ### M16 – Round corners (fillet)
-Branch `feature/round-corners`.
+Spec: `specs/M16.md`. Branch `feature/round-corners`.
 - Drawing tool with a radius parameter: click a single sharp corner, or apply to the selected contours to round every sharp corner.
 - Corners where the radius does not fit are skipped and reported (message with the count). Drawn and DXF geometry; undoable.
 - Docs: `drawing.md`, `shortcuts.md` (sidebar button / key).

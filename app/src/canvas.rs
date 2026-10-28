@@ -9,7 +9,8 @@ use eframe::egui::{
     self, Color32, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui,
     Vec2,
 };
-use hc_geom::{BBox, Point};
+use hc_geom::fillet::FilletSkip;
+use hc_geom::{BBox, Point, Segment};
 use hc_project::Geom;
 use hc_toolpath::Move;
 
@@ -120,8 +121,12 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
         if resp.clicked_by(PointerButton::Primary) && !space {
             if let Some(p) = resp.interact_pointer_pos() {
                 let w = s.view.screen_to_world(rect, p);
-                let snap = s.snap_at(w, SNAP_PX / zoom);
-                s.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some());
+                if s.tool == CanvasTool::Fillet {
+                    s.fillet_click(w, SNAP_PX / zoom);
+                } else {
+                    let snap = s.snap_at(w, SNAP_PX / zoom);
+                    s.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some());
+                }
             }
         }
         app.box_start = None;
@@ -338,7 +343,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     tab_markers(s, painter, rect, dark, ui.visuals().text_color());
     if let Some(sn) = s.moving.as_ref().and_then(|m| m.snap) {
         crate::snap::marker(painter, v.world_to_screen(rect, sn.p), sn.kind, SNAP);
-        snap_label(painter, ui, v.world_to_screen(rect, sn.p), sn.kind);
+        snap_label(painter, ui, v.world_to_screen(rect, sn.p), sn.kind.label());
     }
     // tool marker on top
     if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
@@ -380,11 +385,11 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
 }
 
 /// Snap marker with its kind label and the rubber band from the pending first point.
-fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, kind: crate::snap::SnapKind) {
+fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, text: &str) {
     painter.text(
         c + Vec2::new(10.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
-        kind.label(),
+        text,
         egui::TextStyle::Body.resolve(ui.style()),
         SNAP,
     );
@@ -393,13 +398,47 @@ fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, kind: crate::snap::SnapKind) 
 fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
     let v = &s.view;
     let Some(cursor) = s.cursor else { return };
+    if s.tool == CanvasTool::Fillet {
+        if let Some(h) = s.fillet_hover(cursor, SNAP_PX / v.zoom as f64) {
+            let c = v.world_to_screen(rect, h.vertex);
+            crate::snap::marker(painter, c, crate::snap::SnapKind::Corner, SNAP);
+            let label = match h.result {
+                Ok(Segment::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep,
+                }) => {
+                    let pts: Vec<Pos2> = tessellate_arc(
+                        center,
+                        radius,
+                        start_angle,
+                        sweep,
+                        ARC_TOL_PX / v.zoom as f64,
+                    )
+                    .into_iter()
+                    .map(|p| v.world_to_screen(rect, p))
+                    .collect();
+                    painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, SNAP), 5.0, 4.0));
+                    "Round"
+                }
+                Ok(_) => "Round",
+                Err(FilletSkip::NotSharp) => "Not sharp",
+                Err(FilletSkip::NotLines) => "Not two lines",
+                Err(FilletSkip::TooLarge { .. }) => "Too large",
+                Err(FilletSkip::BadRadius) => "Radius?",
+            };
+            snap_label(painter, ui, c, label);
+        }
+        return;
+    }
     let snap = s.snap_at(cursor, SNAP_PX / v.zoom as f64);
     let at = snap.map_or(cursor, |sn| sn.p);
     let stroke = Stroke::new(1.0, SNAP);
     if let Some(sn) = snap {
         let c = v.world_to_screen(rect, sn.p);
         crate::snap::marker(painter, c, sn.kind, SNAP);
-        snap_label(painter, ui, c, sn.kind);
+        snap_label(painter, ui, c, sn.kind.label());
     }
     let Some(first) = s.pending else { return };
     let world: Vec<Point> = match s.tool {
@@ -424,7 +463,9 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect) {
                 ARC_TOL_PX / v.zoom as f64,
             )
         }
-        CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Text => return,
+        CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Text | CanvasTool::Fillet => {
+            return
+        }
     };
     let pts: Vec<Pos2> = world
         .into_iter()

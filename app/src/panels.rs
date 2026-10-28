@@ -193,6 +193,7 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 tool_item(app, ui, "Rectangle", "R", CanvasTool::Rect);
                 tool_item(app, ui, "Circle", "C", CanvasTool::Circle);
                 tool_item(app, ui, "Text", "T", CanvasTool::Text);
+                tool_item(app, ui, "Round corners", "", CanvasTool::Fillet);
                 ui.separator();
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
@@ -360,7 +361,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 
 pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntry>> {
     let sc = |s: &KeyboardShortcut| Some(ctx.format_shortcut(s));
-    let key = |k: &str| Some(k.to_string());
+    // empty = no shortcut (no empty "()" in the tooltip)
+    let key = |k: &str| (!k.is_empty()).then(|| k.to_string());
     let s = &app.state;
     let tool = |glyph, name, k, t: CanvasTool| SideEntry {
         selected: Some(s.tool == t),
@@ -379,6 +381,7 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
             tool(icons::RECT, "Rectangle", "R", CanvasTool::Rect),
             tool(icons::CIRCLE, "Circle", "C", CanvasTool::Circle),
             tool(icons::TEXT, "Text", "T", CanvasTool::Text),
+            tool(icons::FILLET, "Round corners", "", CanvasTool::Fillet),
             tool(icons::ORIGIN, "Set origin", "O", CanvasTool::SetOrigin),
             entry(icons::FIT, "Zoom to fit", key("F"), SideAct::Fit),
         ],
@@ -1166,14 +1169,16 @@ fn draw_form(app: &mut App, ui: &mut Ui) {
     let s = &mut app.state;
     let u = s.project.units;
     let tool = s.tool;
+    let has_sel = !s.selection.is_empty();
     let f = &mut s.draw;
     let title = match tool {
         CanvasTool::Line => "Draw line",
         CanvasTool::Rect => "Draw rectangle",
         CanvasTool::Text => "Draw text",
+        CanvasTool::Fillet => "Round corners",
         _ => "Draw circle",
     };
-    let mut add = false;
+    let (mut add, mut round_all) = (false, false);
     ui.group(|ui| {
         ui.strong(title);
         egui::Grid::new("draw_form").num_columns(2).show(ui, |ui| {
@@ -1220,6 +1225,7 @@ fn draw_form(app: &mut App, ui: &mut Ui) {
                     row(ui, "Y", &mut f.a.y);
                     row(ui, "Height", &mut f.height);
                 }
+                CanvasTool::Fillet => row(ui, "Radius", &mut f.fillet_r),
                 _ => {
                     row(ui, "Center X", &mut f.a.x);
                     row(ui, "Center Y", &mut f.a.y);
@@ -1227,8 +1233,18 @@ fn draw_form(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
-        add = ui.button("Add").clicked();
+        if tool == CanvasTool::Fillet {
+            round_all = ui
+                .add_enabled(has_sel, egui::Button::new("Round all corners of selection"))
+                .clicked();
+            ui.weak("Or click a corner on the canvas");
+        } else {
+            add = ui.button("Add").clicked();
+        }
     });
+    if round_all {
+        s.fillet_selection();
+    }
     if let Some(shape) = add.then(|| s.draw.shape(tool)).flatten() {
         if let Err(e) = s.add_shape(shape) {
             s.msg(Severity::Warning, e);
