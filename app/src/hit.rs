@@ -44,11 +44,26 @@ pub fn dist_to_item(p: Point, item: &Item) -> f64 {
 }
 
 /// Nearest visible item within `tol`; on a tie the later item wins.
+#[cfg(test)]
 pub fn pick(items: &[Item], visible: impl Fn(&Item) -> bool, p: Point, tol: f64) -> Option<u64> {
+    pick_prefer(items, visible, p, tol, |_| false)
+}
+
+/// As `pick`, but on a tie an item with `prefer(id)` (e.g. already selected) beats the later one.
+pub fn pick_prefer(
+    items: &[Item],
+    visible: impl Fn(&Item) -> bool,
+    p: Point,
+    tol: f64,
+    prefer: impl Fn(u64) -> bool,
+) -> Option<u64> {
     let mut best: Option<(u64, f64)> = None;
     for it in items.iter().filter(|i| visible(i)) {
         let d = dist_to_item(p, it);
-        if d <= tol && best.is_none_or(|(_, bd)| d <= bd + TIE) {
+        let better = best.is_none_or(|(bid, bd)| {
+            d < bd - TIE || (d <= bd + TIE && (prefer(it.id) || !prefer(bid)))
+        });
+        if d <= tol && better {
             best = Some((it.id, d));
         }
     }
@@ -196,6 +211,26 @@ mod tests {
         assert!(!line_hits_box(pt(-5.0, 0.0), pt(0.0, -5.0), &b));
         assert!(line_hits_box(pt(-5.0, 5.0), pt(5.0, -5.0), &b)); // touches the corner
         assert!(!line_hits_box(pt(11.0, -5.0), pt(20.0, 5.0), &b));
+    }
+
+    #[test]
+    fn pick_prefers_selected_on_tie() {
+        let c = |id| Item {
+            id,
+            layer: "0".into(),
+            source: hc_project::Source::Drawn,
+            geom: Geom::Point(pt(1.0, 1.0)),
+        };
+        let items = [c(1), c(2)];
+        assert_eq!(pick(&items, |_| true, pt(1.0, 1.0), 0.1), Some(2));
+        assert_eq!(
+            pick_prefer(&items, |_| true, pt(1.0, 1.0), 0.1, |id| id == 1),
+            Some(1)
+        );
+        assert_eq!(
+            pick_prefer(&items, |_| true, pt(1.0, 1.0), 0.1, |_| true),
+            Some(2)
+        );
     }
 
     #[test]

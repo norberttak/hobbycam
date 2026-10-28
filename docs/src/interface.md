@@ -16,8 +16,8 @@ From top to bottom and left to right:
 - **Canvas** in the middle: the drawing on a grid, the stock as a dashed rectangle, and the work origin
   as a red (X) and green (Y) arrow. Toolpaths are drawn in blue (View → Show toolpaths turns them off).
 - **Properties** on the right shows what you selected last: the settings of an operation (click it in the list), or
-  details and the Transform box of the geometry you clicked on the canvas, or the number form of the active drawing
-  tool. It is hidden when nothing is selected.
+  the editable details (position, size) and the Transform box of the geometry you clicked on the canvas, or the
+  number form of the active drawing tool. It is hidden when nothing is selected.
 - **Issues** panel at the bottom, only when a [sanity check](sanity.md) found something. Click an issue to select its
   operation and item.
 - **Status bar**: cursor position (plus "Work X … Y …" when the origin is not the drawing origin), zoom in percent,
@@ -36,8 +36,9 @@ From top to bottom and left to right:
 | Middle-button drag, or hold Space and drag | pan |
 | Click | select one item (click empty space to clear) |
 | Shift + click | add an item to the selection, or remove it again |
-| Drag a box left to right | select everything fully inside the box |
-| Drag a box right to left | select everything the box touches |
+| Drag an item | move the selection (Shift while dragging: straight; Esc cancels) |
+| Drag a box left to right (from empty space) | select everything fully inside the box |
+| Drag a box right to left (from empty space) | select everything the box touches |
 | `F` | zoom to fit the drawing and the stock |
 
 Plain-key shortcuts (`F`, `L`, `Esc`, …) work while the mouse is over the canvas and you are not typing in a field.

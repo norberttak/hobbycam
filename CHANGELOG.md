@@ -7,6 +7,7 @@ All notable changes to HobbyCAM are listed here. The format follows
 
 ### Added
 - Settings window (File → Settings…, Cmd/Ctrl+, or the gear in the sidebar) with Units, Machine and Stock in one place.
+- Move elements by dragging (with snapping); edit line, circle and rectangle sizes in Properties.
 
 ### Changed
 - The Settings menu is gone: Settings… and Tool library… are in the File menu; the sidebar has one Settings button.

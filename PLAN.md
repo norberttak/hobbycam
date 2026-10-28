@@ -194,7 +194,7 @@ Spec: `specs/M14.md`. Branch `feature/settings-window`.
 - Docs: `interface.md`, `stock-origin.md`, `shortcuts.md` (new sidebar button), screenshots if they show the old menu.
 
 ### M15 – Select, move and edit elements
-Branch `feature/edit-elements`.
+Spec: `specs/M15.md`. Branch `feature/edit-elements`.
 - Select and move canvas elements (drawn and imported DXF) by dragging, with snapping; one undo step per drag.
 - Properties derived from the geometry (no project format bump if possible): full circle → centre + radius; single line →
   end points + length; axis-aligned rectangle → position + width + height (+ corner radius); anything else → position /

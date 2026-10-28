@@ -168,6 +168,21 @@ pub enum Shape {
     },
 }
 
+/// An element drag in progress (Select tool, see `start_move`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveDrag {
+    /// Moving items and their geometry when the drag started.
+    pub orig: Vec<(u64, Geom)>,
+    /// Grabbed world point (snapped to the moving items when one of their snap points was near).
+    pub grab: Point,
+    /// Current translation, mm.
+    pub delta: Point,
+    /// Snap target under the cursor (for the canvas marker).
+    pub snap: Option<Snap>,
+    /// `dirty` before the drag, restored by `cancel_move` / a zero move.
+    pub was_dirty: bool,
+}
+
 /// Persistent draw form values (mm). `a` = line start, rectangle bottom left, circle centre, text baseline start; `b` = line end.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawForm {
@@ -291,6 +306,8 @@ pub struct AppState {
     pub xform: XformForm,
     /// First click of a two-click drawing tool.
     pub pending: Option<Point>,
+    /// Element drag in progress.
+    pub moving: Option<MoveDrag>,
     /// (item index, point, kind), rebuilt in `items_changed`.
     pub snap_cache: SnapCache,
     pub undo: Vec<Project>,
@@ -343,6 +360,7 @@ impl AppState {
             draw: DrawForm::default(),
             xform: XformForm::default(),
             pending: None,
+            moving: None,
             snap_cache: SnapCache::default(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -454,6 +472,7 @@ impl AppState {
         self.items_changed();
         self.fit_pending = true;
         self.pending = None;
+        self.moving = None;
         self.undo.clear();
         self.redo.clear();
         self.undo_base = self.project.clone();
@@ -705,7 +724,13 @@ impl AppState {
     // ---------------------------------------------------------------- selection
 
     pub fn click_select(&mut self, p: Point, tol: f64, shift: bool) {
-        let hit = hit::pick(&self.project.items, |i| self.is_visible(i), p, tol);
+        let hit = hit::pick_prefer(
+            &self.project.items,
+            |i| self.is_visible(i),
+            p,
+            tol,
+            |id| self.selection.contains(&id),
+        );
         if shift {
             // the op stays current, so the user can edit its geometry for "Use current selection"
             if let Some(id) = hit {
@@ -744,6 +769,109 @@ impl AppState {
         self.selection.extend(ids);
     }
 
+    /// Drag start at `p` (world): when a visible item is within `pick_tol`, applies the plain-click rules if it is not
+    /// selected yet, then starts moving the selection if that item is selected. False = no move (the canvas starts a box).
+    pub fn start_move(&mut self, p: Point, pick_tol: f64, snap_r: f64) -> bool {
+        let Some(hit) = hit::pick_prefer(
+            &self.project.items,
+            |i| self.is_visible(i),
+            p,
+            pick_tol,
+            |id| self.selection.contains(&id),
+        ) else {
+            return false;
+        };
+        if !self.selection.contains(&hit) {
+            self.click_select(p, pick_tol, false);
+        }
+        if !self.selection.contains(&hit) {
+            return false;
+        }
+        let orig = self
+            .project
+            .items
+            .iter()
+            .filter(|i| self.selection.contains(&i.id))
+            .map(|i| (i.id, i.geom.clone()))
+            .collect();
+        let grab = snap::nearest(
+            &self.snap_cache.cands,
+            &self.project.items,
+            |i| self.selection.contains(&i.id),
+            p,
+            snap_r,
+        )
+        .map_or(p, |s| s.p);
+        self.moving = Some(MoveDrag {
+            orig,
+            grab,
+            delta: Point::new(0.0, 0.0),
+            snap: None,
+            was_dirty: self.dirty,
+        });
+        true
+    }
+
+    /// Moves the dragged items so the grab point lands on the cursor (or the snap target near it); `axis_lock` zeroes the
+    /// smaller component. No-op without a drag. Ids that no longer exist are skipped.
+    pub fn drag_move(&mut self, cursor: Point, snap_r: f64, axis_lock: bool) {
+        let Some(m) = self.moving.take() else {
+            return;
+        };
+        let snap = snap::nearest(
+            &self.snap_cache.cands,
+            &self.project.items,
+            |i| self.is_visible(i) && !m.orig.iter().any(|(id, _)| *id == i.id),
+            cursor,
+            snap_r,
+        );
+        let mut d = snap.map_or(cursor, |s| s.p) - m.grab;
+        if axis_lock {
+            if d.x.abs() >= d.y.abs() {
+                d.y = 0.0;
+            } else {
+                d.x = 0.0;
+            }
+        }
+        let t = Transform::translate(d.x, d.y);
+        for (id, g) in &m.orig {
+            if let Some(idx) = self.project.items.iter().position(|i| i.id == *id) {
+                let item = &mut self.project.items[idx];
+                item.geom = match g {
+                    Geom::Contour(c) => Geom::Contour(c.transformed(&t)),
+                    Geom::Point(q) => Geom::Point(*q + d),
+                };
+                self.item_bbox[idx] = hit::item_bbox(item);
+            }
+        }
+        self.dirty = m.was_dirty || d != Point::new(0.0, 0.0);
+        self.moving = Some(MoveDrag {
+            delta: d,
+            snap,
+            ..m
+        });
+    }
+
+    /// Finishes the drag (keeps the geometry, rebuilds bboxes and snap cache).
+    pub fn end_move(&mut self) {
+        self.moving = None;
+        self.items_changed();
+    }
+
+    /// Restores the geometry and `dirty` from before the drag.
+    pub fn cancel_move(&mut self) {
+        let Some(m) = self.moving.take() else {
+            return;
+        };
+        for (id, g) in m.orig {
+            if let Some(item) = self.project.items.iter_mut().find(|i| i.id == id) {
+                item.geom = g;
+            }
+        }
+        self.dirty = self.project != self.saved;
+        self.items_changed();
+    }
+
     pub fn clear_selection(&mut self) {
         self.selection.clear();
     }
@@ -775,13 +903,18 @@ impl AppState {
     // ---------------------------------------------------------------- canvas tools and drawing
 
     pub fn set_tool(&mut self, t: CanvasTool) {
+        if self.moving.is_some() {
+            self.end_move();
+        }
         self.tool = t;
         self.pending = None;
     }
 
-    /// Escape: drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
+    /// Escape: cancels a move drag, else drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
     pub fn escape(&mut self) {
-        if self.pending.is_some() {
+        if self.moving.is_some() {
+            self.cancel_move();
+        } else if self.pending.is_some() {
             self.pending = None;
         } else if self.tool != CanvasTool::Select {
             self.tool = CanvasTool::Select;
@@ -865,6 +998,14 @@ impl AppState {
                 }
                 return Ok(self.add_geoms(g.contours.into_iter().map(Geom::Contour).collect()));
             }
+            other => self.shape_contour(other)?,
+        };
+        Ok(self.add_geoms(vec![Geom::Contour(contour)]))
+    }
+
+    /// Line / Rect / Circle → its contour, with the add_shape validation messages; Text → Err("Not editable as that shape").
+    fn shape_contour(&self, s: Shape) -> Result<Contour, String> {
+        Ok(match s {
             Shape::Line { a, b } => shapes::line(a, b).ok_or("Line is too short")?,
             Shape::Rect { min, w, h, r } => {
                 if !(w >= EPS && h >= EPS && w.is_finite() && h.is_finite()) {
@@ -882,8 +1023,66 @@ impl AppState {
                 })?
             }
             Shape::Circle { c, r } => shapes::circle(c, r).ok_or("Circle needs a diameter")?,
+            Shape::Text { .. } => return Err("Not editable as that shape".into()),
+        })
+    }
+
+    /// The editable shape of a single contour item (`shapes::recognize`); None for points and other contours.
+    pub fn item_shape(&self, id: u64) -> Option<Shape> {
+        let Geom::Contour(c) = &self.item(id)?.geom else {
+            return None;
         };
-        Ok(self.add_geoms(vec![Geom::Contour(contour)]))
+        Some(match shapes::recognize(c)? {
+            shapes::Primitive::Line { a, b } => Shape::Line { a, b },
+            shapes::Primitive::Rect { min, w, h, r } => Shape::Rect { min, w, h, r },
+            shapes::Primitive::Circle { center, r } => Shape::Circle { c: center, r },
+        })
+    }
+
+    /// Replaces item `id`'s geometry by `s` (same kind as `item_shape(id)`, else Err("Not editable as that shape")).
+    /// Id, layer, source, op references and manual tab fractions stay. On Err nothing changes. Unchanged result = no-op.
+    pub fn edit_shape(&mut self, id: u64, s: Shape) -> Result<(), String> {
+        const NOT: &str = "Not editable as that shape";
+        let cur = self.item_shape(id).ok_or(NOT)?;
+        if std::mem::discriminant(&cur) != std::mem::discriminant(&s) {
+            return Err(NOT.into());
+        }
+        let new = self.shape_contour(s.clone())?;
+        let Some(Geom::Contour(old)) = self.item(id).map(|i| i.geom.clone()) else {
+            return Err(NOT.into());
+        };
+        let new = match s {
+            Shape::Circle { c, r } => {
+                let mut k = old.clone();
+                for seg in &mut k.segments {
+                    if let hc_geom::Segment::Arc { center, radius, .. } = seg {
+                        (*center, *radius) = (c, r);
+                    }
+                }
+                k
+            }
+            Shape::Rect { .. } => shapes::align_like(&old, new),
+            _ => new,
+        };
+        if new == old {
+            return Ok(());
+        }
+        if let Some(item) = self.project.items.iter_mut().find(|i| i.id == id) {
+            item.geom = Geom::Contour(new);
+        }
+        self.items_changed();
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Translates the selection so its bbox min is `min` (via `transform_selection`).
+    pub fn move_selection_to(&mut self, min: Point) {
+        let b = self.selection_bbox();
+        let (dx, dy) = (min.x - b.min.x, min.y - b.min.y);
+        if b.is_empty() || (dx == 0.0 && dy == 0.0) {
+            return;
+        }
+        self.transform_selection(&Transform::translate(dx, dy));
     }
 
     /// Adds drawn geometry; the new items become the selection (and the current thing). Nothing (not dirty) when empty.
@@ -948,6 +1147,9 @@ impl AppState {
 
     /// Removes the selected items and their op references / manual tabs.
     pub fn delete_selection(&mut self) {
+        if self.moving.is_some() {
+            self.end_move();
+        }
         if self.selection.is_empty() {
             return;
         }
@@ -1013,6 +1215,7 @@ impl AppState {
             .selected_op
             .filter(|id| ops.iter().any(|o| o.id == *id));
         self.pending = None;
+        self.moving = None;
         self.dirty = self.project != self.saved;
     }
 
@@ -2079,6 +2282,7 @@ mod edge_tests {
         s.click_select(on, 1e-3, false);
         assert!(!s.selection.contains(&hidden_id));
         s.set_layer_visible("Hidden", true);
+        s.clear_selection(); // a selected item that touches `on` would win the tie (pick_prefer)
         s.click_select(on, 1e-3, false);
         assert_eq!(s.selection, [hidden_id].into());
     }
@@ -3522,5 +3726,560 @@ mod m13_tests {
         assert!(s
             .selected_op
             .is_none_or(|id| s.project.operations.iter().any(|o| o.id == id)));
+    }
+}
+
+#[cfg(test)]
+mod m15_tests {
+    use super::tests::{bracket_clean, circles, edit_op, outer, tool};
+    use super::*;
+    use crate::snap::SnapKind;
+    use hc_geom::{Orientation, Segment};
+    use hc_project::Geom;
+
+    fn p(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    fn on(s: &AppState, id: u64) -> Point {
+        match &s.item(id).unwrap().geom {
+            Geom::Contour(c) => c.point_at(0.0),
+            Geom::Point(q) => *q,
+        }
+    }
+
+    #[test]
+    fn m15_review_delete_or_save_during_drag_keeps_dirty_right() {
+        let mut s = AppState::new(None);
+        let ids = s
+            .add_shape(Shape::Circle {
+                c: p(50.0, 50.0),
+                r: 10.0,
+            })
+            .unwrap();
+        let id = ids[0];
+        s.saved = s.project.clone();
+        s.dirty = false;
+        assert!(s.start_move(on(&s, id), 0.5, 0.0));
+        s.drag_move(p(80.0, 50.0), 0.0, false);
+        s.delete_selection();
+        assert!(s.moving.is_none() && s.item(id).is_none());
+        s.escape();
+        assert!(s.dirty, "unsaved deletion must stay flagged");
+
+        // saved mid-drag (Cmd+S), then Esc: the restored geometry differs from the file
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(Shape::Circle {
+                c: p(50.0, 50.0),
+                r: 10.0,
+            })
+            .unwrap()[0];
+        assert!(s.start_move(on(&s, id), 0.5, 0.0));
+        s.drag_move(p(80.0, 50.0), 0.0, false);
+        s.saved = s.project.clone(); // as Cmd+S during the drag
+        s.cancel_move();
+        assert!(s.dirty, "the restored geometry differs from the saved file");
+    }
+
+    #[test]
+    fn m15_review_pick_prefers_selected_duplicate() {
+        let (mut s, _) = bracket_clean();
+        let holes = circles(&s, 15.875);
+        let pt = on(&s, holes[0]);
+        let first = hit::pick(&s.project.items, |i| s.is_visible(i), pt, 0.5).unwrap();
+        let other = s
+            .project
+            .items
+            .iter()
+            .find(|i| i.id != first && hit::dist_to_item(pt, i) < 1e-9)
+            .map(|i| i.id)
+            .expect("the bracket has a duplicate hole");
+        s.selection = [other].into();
+        s.click_select(pt, 0.5, false);
+        assert_eq!(
+            s.selection,
+            [other].into(),
+            "click keeps the already selected copy"
+        );
+    }
+
+    /// The bracket has an identical duplicate of the holes on another layer; hide the other layers so a pick finds the Outline one.
+    fn hide_dup_layers(s: &mut AppState) {
+        let others: Vec<String> = s
+            .project
+            .layers
+            .iter()
+            .filter(|l| l.name != "Outline")
+            .map(|l| l.name.clone())
+            .collect();
+        for l in others {
+            s.set_layer_visible(&l, false);
+        }
+    }
+
+    fn contour(s: &AppState, id: u64) -> Contour {
+        match &s.item(id).unwrap().geom {
+            Geom::Contour(c) => c.clone(),
+            Geom::Point(_) => panic!("point"),
+        }
+    }
+
+    fn centre(s: &AppState, id: u64) -> Point {
+        contour(s, id).as_circle().unwrap().center
+    }
+
+    fn near(a: Point, b: Point) -> bool {
+        a.approx_eq(b, 1e-9)
+    }
+
+    fn circle_state() -> (AppState, u64, u64) {
+        let mut s = AppState::new(None);
+        let c = s
+            .add_shape(Shape::Circle {
+                c: p(50.0, 50.0),
+                r: 10.0,
+            })
+            .unwrap()[0];
+        let r = s
+            .add_shape(Shape::Rect {
+                min: p(100.0, 0.0),
+                w: 20.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap()[0];
+        s.commit_undo(true);
+        (s, c, r)
+    }
+
+    #[test]
+    fn m15_move_drag_one_undo_step() {
+        let (mut s, c, r) = circle_state();
+        let rect0 = contour(&s, r);
+        let n = s.undo.len();
+        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        assert_eq!(s.selection, BTreeSet::from([c]));
+        s.drag_move(p(70.0, 50.0), 0.0, false);
+        s.commit_undo(false);
+        s.drag_move(p(80.0, 55.0), 0.0, false);
+        assert!(near(centre(&s, c), p(70.0, 55.0)));
+        assert_eq!(s.moving.as_ref().unwrap().delta, p(20.0, 5.0));
+        s.end_move();
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n + 1);
+        assert!(s.moving.is_none() && s.dirty);
+        assert_eq!(contour(&s, r), rect0);
+        s.undo();
+        assert!(near(centre(&s, c), p(50.0, 50.0)));
+        assert_eq!(contour(&s, r), rect0);
+    }
+
+    #[test]
+    fn m15_move_snaps_grab_and_target() {
+        let mut s = AppState::new(None);
+        let a = s
+            .add_shape(Shape::Rect {
+                min: p(0.0, 0.0),
+                w: 20.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap()[0];
+        s.add_shape(Shape::Rect {
+            min: p(50.0, 0.0),
+            w: 20.0,
+            h: 10.0,
+            r: 0.0,
+        })
+        .unwrap();
+        let b = s.project.items[1].id;
+        s.click_select(on(&s, a), 0.5, false);
+        assert!(s.start_move(p(0.2, 0.1), 0.5, 1.0));
+        assert_eq!(s.moving.as_ref().unwrap().grab, p(0.0, 0.0));
+        s.drag_move(p(70.3, 0.2), 1.0, false);
+        assert!(near(s.item_bbox[0].min, p(70.0, 0.0)));
+        let sn = s.moving.as_ref().unwrap().snap.unwrap();
+        assert_eq!((sn.kind, sn.item), (SnapKind::Corner, b));
+        s.drag_move(p(0.1, 0.1), 1.0, false);
+        let m = s.moving.as_ref().unwrap();
+        assert!(near(m.delta, p(0.1, 0.1)));
+        assert_eq!(m.snap, None);
+    }
+
+    #[test]
+    fn m15_move_axis_lock() {
+        let (mut s, _, _) = circle_state();
+        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        s.drag_move(p(90.0, 54.0), 0.0, true);
+        assert!(near(s.moving.as_ref().unwrap().delta, p(30.0, 0.0)));
+        s.drag_move(p(62.0, 80.0), 0.0, true);
+        assert!(near(s.moving.as_ref().unwrap().delta, p(0.0, 30.0)));
+    }
+
+    #[test]
+    fn m15_escape_cancels_move() {
+        let (mut s, _) = bracket_clean();
+        s.saved = s.project.clone();
+        s.dirty = false;
+        s.commit_undo(true);
+        let n = s.undo.len();
+        let hole = circles(&s, 15.875)[0];
+        hide_dup_layers(&mut s);
+        let c0 = centre(&s, hole);
+        assert!(s.start_move(on(&s, hole), 0.5, 0.0));
+        s.drag_move(on(&s, hole) + p(5.0, 0.0), 0.0, false);
+        assert!(!near(centre(&s, hole), c0));
+        s.escape();
+        assert!(near(centre(&s, hole), c0));
+        assert!(s.moving.is_none() && !s.dirty);
+        assert!(s.selection.contains(&hole));
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n);
+        s.drag_move(p(0.0, 0.0), 0.0, false);
+        assert!(near(centre(&s, hole), c0));
+    }
+
+    #[test]
+    fn m15_drag_start_on_empty_is_no_move() {
+        let (mut s, _) = bracket_clean();
+        let sel = s.selection.clone();
+        assert!(!s.start_move(p(-1000.0, -1000.0), 0.5, 0.0));
+        assert!(s.moving.is_none());
+        assert_eq!(s.selection, sel);
+    }
+
+    #[test]
+    fn m15_ops_and_tabs_follow_move() {
+        let (mut s, outside) = bracket_clean();
+        let hole = circles(&s, 15.875)[0];
+        hide_dup_layers(&mut s);
+        let c0 = centre(&s, hole);
+        assert!(s.start_move(on(&s, hole), 0.5, 0.0));
+        s.drag_move(on(&s, hole) + p(5.0, -3.0), 0.0, false);
+        s.end_move();
+        s.refresh_toolpaths();
+        let drill = &s.project.operations[2];
+        assert!(drill.items.contains(&hole));
+        let tp = s.toolpath_result(drill.id).unwrap().as_ref().unwrap();
+        let at: Vec<Point> = tp
+            .moves
+            .iter()
+            .filter_map(|m| match m {
+                hc_toolpath::Move::Drill { at, .. } => Some(*at),
+                _ => None,
+            })
+            .collect();
+        assert!(at.iter().any(|a| near(*a, c0 + p(5.0, -3.0))));
+        assert!(!at.iter().any(|a| near(*a, c0)));
+
+        let outer = outer(&s);
+        edit_op(&mut s, outside, |o| {
+            o.tabs.manual = vec![ManualTabs {
+                item: outer,
+                positions: vec![0.1, 0.6],
+            }]
+        });
+        s.select_op(outside);
+        let x0 = s.item_bbox[s.project.items.iter().position(|i| i.id == outer).unwrap()]
+            .min
+            .x;
+        assert!(s.start_move(on(&s, outer), 0.5, 0.0));
+        s.drag_move(on(&s, outer) + p(10.0, 0.0), 0.0, false);
+        s.end_move();
+        assert_eq!(s.selected_op, Some(outside));
+        let op = s
+            .project
+            .operations
+            .iter()
+            .find(|o| o.id == outside)
+            .unwrap();
+        assert_eq!(op.tabs.manual[0].positions, vec![0.1, 0.6]);
+        let m = s.tab_markers();
+        let mk = m.iter().find(|(id, _, _)| *id == outer).unwrap();
+        assert_eq!(mk.2, vec![0.1, 0.6]);
+        let x1 = s.item_bbox[s.project.items.iter().position(|i| i.id == outer).unwrap()]
+            .min
+            .x;
+        assert!((x1 - x0 - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn m15_undo_during_drag_ends_move() {
+        let (mut s, c, _) = circle_state();
+        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        s.drag_move(p(70.0, 50.0), 0.0, false);
+        s.undo();
+        assert!(s.moving.is_none());
+        assert!(near(centre(&s, c), p(50.0, 50.0)));
+        s.drag_move(p(99.0, 99.0), 0.0, false);
+        assert!(near(centre(&s, c), p(50.0, 50.0)));
+    }
+
+    #[test]
+    fn m15_item_shape() {
+        let mut s = AppState::new(None);
+        let l = s
+            .add_shape(Shape::Line {
+                a: p(0.0, 0.0),
+                b: p(3.0, 4.0),
+            })
+            .unwrap()[0];
+        assert_eq!(
+            s.item_shape(l),
+            Some(Shape::Line {
+                a: p(0.0, 0.0),
+                b: p(3.0, 4.0)
+            })
+        );
+        let r = s
+            .add_shape(Shape::Rect {
+                min: p(10.0, 20.0),
+                w: 30.0,
+                h: 10.0,
+                r: 2.0,
+            })
+            .unwrap()[0];
+        match s.item_shape(r) {
+            Some(Shape::Rect { min, w, h, r }) => {
+                assert!(near(min, p(10.0, 20.0)) && (w - 30.0).abs() < 1e-9);
+                assert!((h - 10.0).abs() < 1e-9 && (r - 2.0).abs() < 1e-9);
+            }
+            o => panic!("{o:?}"),
+        }
+        let c = s
+            .add_shape(Shape::Circle {
+                c: p(1.0, 2.0),
+                r: 2.5,
+            })
+            .unwrap()[0];
+        assert_eq!(
+            s.item_shape(c),
+            Some(Shape::Circle {
+                c: p(1.0, 2.0),
+                r: 2.5
+            })
+        );
+        let t = s
+            .add_shape(Shape::Text {
+                at: p(0.0, 0.0),
+                text: "O".into(),
+                font: hc_text::Font::Hershey,
+                height: 10.0,
+            })
+            .unwrap();
+        assert!(t.iter().all(|&i| s.item_shape(i).is_none()));
+        let (b, _) = bracket_clean();
+        let holes = circles(&b, 15.875);
+        assert!(!holes.is_empty());
+        for h in holes {
+            match b.item_shape(h) {
+                Some(Shape::Circle { r, .. }) => assert!((r - 7.9375).abs() < 1e-9),
+                o => panic!("{o:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn m15_edit_circle() {
+        let (mut s, _) = bracket_clean();
+        let hole = circles(&s, 15.875)[0];
+        let c0 = centre(&s, hole);
+        let before = s.item(hole).unwrap().clone();
+        s.commit_undo(true);
+        s.edit_shape(hole, Shape::Circle { c: c0, r: 5.0 }).unwrap();
+        let it = s.item(hole).unwrap();
+        assert_eq!((&it.layer, &it.source), (&before.layer, &before.source));
+        assert!((contour(&s, hole).as_circle().unwrap().radius - 5.0).abs() < 1e-9);
+        assert!(near(centre(&s, hole), c0));
+        assert!(s.project.operations[2].items.contains(&hole));
+        assert!(s.dirty);
+        assert_eq!(
+            s.edit_shape(hole, Shape::Circle { c: c0, r: 0.0 }),
+            Err("Circle needs a diameter".to_string())
+        );
+        assert!((contour(&s, hole).as_circle().unwrap().radius - 5.0).abs() < 1e-9);
+        s.commit_undo(true);
+        s.undo();
+        assert!((contour(&s, hole).as_circle().unwrap().radius - 7.9375).abs() < 1e-9);
+
+        let two = Contour::from_bulge_vertices(&[(p(0.0, 0.0), 1.0), (p(10.0, 0.0), 1.0)], true);
+        let sweeps: Vec<f64> = two
+            .segments
+            .iter()
+            .map(|g| match g {
+                Segment::Arc { sweep, .. } => *sweep,
+                Segment::Line { .. } => panic!(),
+            })
+            .collect();
+        let id = s.project.add_drawn(vec![Geom::Contour(two)])[0];
+        s.items_changed();
+        s.edit_shape(
+            id,
+            Shape::Circle {
+                c: p(5.0, 0.0),
+                r: 8.0,
+            },
+        )
+        .unwrap();
+        let c = contour(&s, id);
+        assert_eq!(c.segments.len(), 2);
+        for (g, sw) in c.segments.iter().zip(sweeps) {
+            match g {
+                Segment::Arc {
+                    radius,
+                    sweep,
+                    center,
+                    ..
+                } => {
+                    assert!(
+                        (radius - 8.0).abs() < 1e-9 && *sweep == sw && near(*center, p(5.0, 0.0))
+                    );
+                }
+                Segment::Line { .. } => panic!(),
+            }
+        }
+    }
+
+    #[test]
+    fn m15_edit_line() {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(Shape::Line {
+                a: p(0.0, 0.0),
+                b: p(3.0, 4.0),
+            })
+            .unwrap()[0];
+        s.edit_shape(
+            id,
+            Shape::Line {
+                a: p(0.0, 0.0),
+                b: p(6.0, 8.0),
+            },
+        )
+        .unwrap();
+        assert!(near(contour(&s, id).segments[0].end(), p(6.0, 8.0)));
+        let before = contour(&s, id);
+        assert_eq!(
+            s.edit_shape(
+                id,
+                Shape::Line {
+                    a: p(0.0, 0.0),
+                    b: p(0.0, 0.0)
+                }
+            ),
+            Err("Line is too short".to_string())
+        );
+        assert_eq!(contour(&s, id), before);
+        assert_eq!(
+            s.edit_shape(
+                id,
+                Shape::Circle {
+                    c: p(0.0, 0.0),
+                    r: 1.0
+                }
+            ),
+            Err("Not editable as that shape".to_string())
+        );
+    }
+
+    #[test]
+    fn m15_edit_rect() {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(Shape::Rect {
+                min: p(10.0, 20.0),
+                w: 30.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap()[0];
+        s.commit_undo(true);
+        let rect = |w, r| Shape::Rect {
+            min: p(10.0, 20.0),
+            w,
+            h: 10.0,
+            r,
+        };
+        s.edit_shape(id, rect(40.0, 0.0)).unwrap();
+        let c = contour(&s, id);
+        let b = c.bbox();
+        assert!(near(b.min, p(10.0, 20.0)) && near(b.max, p(50.0, 30.0)));
+        assert_eq!(c.orientation(), Some(Orientation::Ccw));
+        assert!(near(c.start(), p(10.0, 20.0)));
+        let before = contour(&s, id);
+        assert_eq!(
+            s.edit_shape(id, rect(40.0, 6.0)),
+            Err("Corner radius must be at most 5.000 mm".to_string())
+        );
+        assert_eq!(contour(&s, id), before);
+        s.edit_shape(id, rect(40.0, 2.0)).unwrap();
+        assert_eq!(contour(&s, id).segments.len(), 8);
+        s.commit_undo(true);
+        let n = s.undo.len();
+        s.edit_shape(id, rect(40.0, 2.0)).unwrap();
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n);
+    }
+
+    #[test]
+    fn m15_edit_imported_cw_rect_keeps_tabs() {
+        let mut s = AppState::new(None);
+        s.library.add(tool(1)).unwrap();
+        let v: Vec<(Point, f64)> = [(40.0, 30.0), (40.0, 20.0), (10.0, 20.0), (10.0, 30.0)]
+            .iter()
+            .map(|&(x, y)| (p(x, y), 0.0))
+            .collect();
+        let id = s
+            .project
+            .add_drawn(vec![Geom::Contour(Contour::from_bulge_vertices(&v, true))])[0];
+        s.items_changed();
+        s.selection = BTreeSet::from([id]);
+        let op = s.new_operation(NewKind::Contour, 1).unwrap();
+        edit_op(&mut s, op, |o| {
+            o.tabs.manual = vec![ManualTabs {
+                item: id,
+                positions: vec![0.25],
+            }]
+        });
+        s.edit_shape(
+            id,
+            Shape::Rect {
+                min: p(10.0, 20.0),
+                w: 60.0,
+                h: 10.0,
+                r: 0.0,
+            },
+        )
+        .unwrap();
+        let c = contour(&s, id);
+        assert_eq!(c.orientation(), Some(Orientation::Cw));
+        assert!(near(c.start(), p(70.0, 30.0)));
+        let o = s.project.operations.iter().find(|o| o.id == op).unwrap();
+        assert_eq!(o.items, vec![id]);
+        assert_eq!(o.tabs.manual[0].positions, vec![0.25]);
+    }
+
+    #[test]
+    fn m15_move_selection_to() {
+        let (mut s, _) = bracket_clean();
+        let holes = circles(&s, 15.875);
+        let h = |s: &AppState, id| {
+            hit::pick(&s.project.items, |i| s.is_visible(i), on(s, id), 0.5).unwrap()
+        };
+        let (a, b) = (h(&s, holes[0]), h(&s, holes[1]));
+        s.click_select(on(&s, a), 0.5, false);
+        s.click_select(on(&s, b), 0.5, true);
+        let size = s.selection_bbox();
+        s.commit_undo(true);
+        let n = s.undo.len();
+        s.move_selection_to(p(0.0, 0.0));
+        let nb = s.selection_bbox();
+        assert!(near(nb.min, p(0.0, 0.0)));
+        assert!(
+            (nb.width() - size.width()).abs() < 1e-9 && (nb.height() - size.height()).abs() < 1e-9
+        );
+        s.commit_undo(true);
+        assert_eq!(s.undo.len(), n + 1);
     }
 }
