@@ -9,6 +9,7 @@ All notable changes to HobbyCAM are listed here. The format follows
 - Settings window (File → Settings…, Cmd/Ctrl+, or the gear in the sidebar) with Units, Machine and Stock in one place.
 - Move elements by dragging (with snapping); edit line, circle and rectangle sizes in Properties.
 - Round corners tool: rounds clicked corners or every sharp corner of the selection with a given radius.
+- The tool library shows a sketch of the tool type with its diameter, flute length, flutes and V angle.
 
 ### Changed
 - The Settings menu is gone: Settings… and Tool library… are in the File menu; the sidebar has one Settings button.
