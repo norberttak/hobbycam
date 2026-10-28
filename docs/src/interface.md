@@ -6,8 +6,10 @@ From top to bottom and left to right:
 
 - **Menu bar**: File, Edit, View, Draw, Help.
 - **Messages** under the menu: import notes, export results and errors. **Dismiss** removes one.
-- **Icon sidebar** (two columns) on the far left. It has the same commands as the menus. Hover a button to see its
-  name and shortcut. Greyed buttons cannot be used right now (for example Delete with nothing selected).
+- **Icon sidebar** (two columns) on the far left, buttons coloured by group (drawing blue, origin and zoom green,
+  edit purple, file slate, toolpaths and simulation orange, tools and settings grey). It has the same commands as the
+  menus. Hover a button to see its name and shortcut. The active tool and the toggles that are on have a dark ring and
+  a small arrow. Grey buttons cannot be used right now (for example Delete with nothing selected).
 - **Layers and Operations** next to the sidebar:
   - the layers of the drawing, each with a checkbox to show or hide it and its item count;
   - the operations in the order they will run, each with an enable checkbox, **Up**, **Down** and **Delete**,

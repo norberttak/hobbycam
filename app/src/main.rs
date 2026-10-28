@@ -18,6 +18,8 @@ mod m10b_verify;
 mod m15_verify;
 #[cfg(test)]
 mod m16_verify;
+#[cfg(test)]
+mod m18_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -25,6 +27,7 @@ mod release_check;
 mod shot;
 mod snap;
 mod state;
+mod theme;
 mod tool_dialog;
 mod tool_sketch;
 mod view;
@@ -86,7 +89,7 @@ pub struct App {
     pub tab_drag: bool,
     /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
     pub export_prompt: Option<hc_toolpath::Severity>,
-    /// The icon font is installed (once, on the first frame).
+    /// The icon font and the theme visuals are installed (once, on the first frame).
     fonts_ready: bool,
 }
 
@@ -116,6 +119,8 @@ impl App {
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             icons::install(&ctx);
+            ctx.set_visuals_of(egui::Theme::Light, theme::visuals(false));
+            ctx.set_visuals_of(egui::Theme::Dark, theme::visuals(true));
             self.fonts_ready = true;
         }
         if self.state.sim_view.playing {
@@ -352,7 +357,7 @@ mod kittest {
     /// Sidebar buttons are the 40 px squares of the two left columns (menu popups can open over the sidebar).
     fn in_sidebar(n: &egui_kittest::Node<'_>) -> bool {
         let r = n.rect();
-        r.min.x < 110.0 && r.height() >= 36.0 && r.width() <= 44.0
+        r.min.x < 110.0 && r.height() >= 32.0 && r.width() <= 44.0
     }
 
     /// The node named (or containing) `name` outside the sidebar; menus and the sidebar share names.
@@ -1513,5 +1518,98 @@ mod kittest {
         h.run();
         assert!(h.query_by_label("Segments").is_some() && h.query_by_label("X").is_some());
         assert!(h.query_by_label("Radius").is_none());
+    }
+
+    /// M18 test 9.
+    #[test]
+    fn m18_tints() {
+        use crate::theme::Tint;
+        let mut h = harness();
+        h.run();
+        let groups = panels::sidebar_groups(h.state(), &h.ctx);
+        assert_eq!(groups.len(), 5);
+        for (g, group) in groups.iter().enumerate() {
+            for e in group {
+                let want = match (g, e.name) {
+                    (0, "Set origin" | "Zoom to fit") => Tint::View,
+                    (0, _) => Tint::Draw,
+                    (1, _) => Tint::Edit,
+                    (2, _) => Tint::File,
+                    (3, _) => Tint::Ops,
+                    _ => Tint::Set,
+                };
+                assert_eq!(e.tint(), want, "{}", e.name);
+            }
+        }
+    }
+
+    /// M18 test 10.
+    #[test]
+    fn m18_theme_follows_os() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_theme(egui::Theme::Light)
+            .build_ui_state(
+                |ui, app: &mut App| app.show(ui),
+                App::new(AppState::new(None)),
+            );
+        h.run();
+        assert_eq!(h.ctx.global_style().visuals.panel_fill, theme::LIGHT.panel);
+        h.ctx.set_theme(egui::Theme::Dark);
+        h.run();
+        let v = h.ctx.global_style().visuals.clone();
+        assert_eq!(v.panel_fill, theme::DARK.panel);
+        assert_eq!(v.extreme_bg_color, theme::DARK.canvas);
+    }
+
+    /// M18 test 11.
+    #[test]
+    fn m18_sidebar_a11y() {
+        let mut h = harness();
+        h.run();
+        for name in SIDEBAR {
+            let r = side(&h, name).rect();
+            assert!(
+                (r.width() - crate::panels::TILE).abs() < 1e-3
+                    && (r.height() - crate::panels::TILE).abs() < 1e-3
+            );
+        }
+        h.state_mut().state.set_tool(state::CanvasTool::Line);
+        h.run();
+        assert!(toggled(&side(&h, "Line")) && !toggled(&side(&h, "Select")));
+        let line = panels::sidebar_groups(h.state(), &h.ctx)[0]
+            .iter()
+            .find(|e| e.name == "Line")
+            .and_then(|e| e.shortcut.clone());
+        assert_eq!(line.as_deref(), Some("L"));
+        h.state_mut().state.selection.clear();
+        h.run();
+        assert!(side_disabled(&h, "Delete selection"));
+        let (n, undo) = (
+            h.state().state.project.items.len(),
+            h.state().state.can_undo(),
+        );
+        click_side(&mut h, "Delete selection");
+        assert_eq!(h.state().state.project.items.len(), n);
+        assert_eq!(h.state().state.can_undo(), undo);
+        let first = h.state().state.project.items[0].id;
+        h.state_mut().state.selection = std::collections::BTreeSet::from([first]);
+        h.run();
+        assert!(!side_disabled(&h, "Delete selection"));
+    }
+
+    /// M18 test 12.
+    #[test]
+    fn m18_sidebar_room() {
+        let mut h = harness();
+        h.run();
+        let (sel, line) = (side(&h, "Select").rect(), side(&h, "Line").rect());
+        assert!(sel.min.x >= 11.0);
+        assert!(line.min.x - sel.max.x >= 16.0);
+        // panel left = tile left - 8 margin - 4 pad (the harness root ui has its own 8 px margin)
+        let panel_right = sel.min.x - 12.0 + crate::panels::SIDEBAR_W;
+        assert!(line.max.x + 5.0 <= panel_right, "{sel:?} {line:?}");
+        let menu_bottom = menu_q(&h, "File", false).unwrap().rect().max.y;
+        assert!(sel.min.y - 5.0 >= menu_bottom);
     }
 }

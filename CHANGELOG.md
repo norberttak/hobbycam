@@ -12,6 +12,8 @@ All notable changes to HobbyCAM are listed here. The format follows
 - The tool library shows a sketch of the tool type with its diameter, flute length, flutes and V angle.
 
 ### Changed
+- New look: coloured sidebar buttons (Phosphor fill icons) grouped by colour, refreshed light and dark colours; the app
+  still follows the system theme.
 - The Settings menu is gone: Settings… and Tool library… are in the File menu; the sidebar has one Settings button.
 
 ### Fixed

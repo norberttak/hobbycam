@@ -1,6 +1,7 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
 use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity, Shape};
+use crate::theme;
 use crate::{aci, icons, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
 use hc_geom::{Point, Transform};
@@ -266,16 +267,66 @@ fn side_button(
     shortcut: Option<String>,
     enabled: bool,
     selected: Option<bool>,
+    tint: theme::Tint,
 ) -> egui::Response {
-    let b = side_widget(glyph, selected.unwrap_or(false));
-    let r = ui.add_enabled(enabled, b);
+    let r = ui.add_enabled(enabled, side_widget(glyph, tint, selected.unwrap_or(false)));
     side_info(&r, name, shortcut, enabled, selected)
 }
 
-fn side_widget(glyph: &str, selected: bool) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(glyph).size(24.0))
-        .min_size(egui::vec2(40.0, 40.0))
-        .selected(selected)
+/// Painted tile (M18): group colour, white glyph; selected = gap + dark ring + arrow on the left (outside the 40 px rect).
+fn side_widget(glyph: &str, tint: theme::Tint, selected: bool) -> impl egui::Widget + '_ {
+    use egui::{pos2, vec2, Align2, FontId, Sense, Shape, Stroke, StrokeKind};
+    move |ui: &mut Ui| {
+        let (rect, r) = ui.allocate_exact_size(vec2(TILE, TILE), Sense::click());
+        if ui.is_rect_visible(rect) {
+            let st = theme::tile_style(
+                tint,
+                ui.visuals().dark_mode,
+                ui.is_enabled(),
+                selected,
+                r.hovered(),
+                r.is_pointer_button_down_on(),
+            );
+            let mut p = ui.painter().clone();
+            p.set_opacity(1.0); // disabled tiles are already grey; do not fade twice
+            p.rect_filled(rect, 8, st.fill);
+            p.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                glyph,
+                FontId::proportional(22.0),
+                st.icon,
+            );
+            if let Some((gap, ring)) = st.ring {
+                p.rect_stroke(rect, 8, Stroke::new(2.5, gap), StrokeKind::Outside);
+                p.rect_stroke(
+                    rect.expand(2.5),
+                    10,
+                    Stroke::new(2.5, ring),
+                    StrokeKind::Outside,
+                );
+                let (l, cy) = (rect.left(), rect.center().y);
+                p.add(Shape::convex_polygon(
+                    vec![
+                        pos2(l - 6.0, cy),
+                        pos2(l - 11.0, cy - 5.0),
+                        pos2(l - 11.0, cy + 5.0),
+                    ],
+                    ring,
+                    Stroke::NONE,
+                ));
+            }
+            if r.has_focus() {
+                p.rect_stroke(
+                    rect,
+                    8,
+                    Stroke::new(2.0, ui.visuals().hyperlink_color),
+                    StrokeKind::Inside,
+                );
+            }
+        }
+        r
+    }
 }
 
 fn side_info(
@@ -296,10 +347,15 @@ fn side_info(
     r.clone().on_hover_text(tip).on_disabled_hover_text(name)
 }
 
-/// Gap between the two button columns and between rows.
-const SIDEBAR_GAP: f32 = 4.0;
-/// Two 40 px buttons, the gap and the panel margins (8 px each side).
-const SIDEBAR_W: f32 = 2.0 * 40.0 + SIDEBAR_GAP + 16.0;
+pub(crate) const TILE: f32 = 36.0;
+/// Gap between the two button columns (room for the selected ring and the arrow of the right column).
+const SIDEBAR_COL_GAP: f32 = 18.0;
+/// Gap between rows (room for the 5 px ring).
+const SIDEBAR_ROW_GAP: f32 = 6.0;
+/// Extra left padding so the left column's arrow is not clipped.
+const SIDEBAR_PAD_LEFT: f32 = 4.0;
+/// Two tiles, the column gap, the extra left padding and the panel margins (8 px each side).
+pub(crate) const SIDEBAR_W: f32 = 2.0 * TILE + SIDEBAR_COL_GAP + SIDEBAR_PAD_LEFT + 16.0;
 
 /// What a sidebar button does; applied after the bar is drawn (one borrow of `app` at a time).
 #[derive(Clone, Copy)]
@@ -320,6 +376,27 @@ enum SideAct {
     Sim,
     Tools,
     Settings,
+}
+
+impl SideEntry {
+    /// Tile colour group.
+    pub(crate) fn tint(&self) -> theme::Tint {
+        use theme::Tint;
+        match self.act {
+            SideAct::Tool(CanvasTool::SetOrigin) | SideAct::Fit => Tint::View,
+            SideAct::Tool(_) => Tint::Draw,
+            SideAct::Undo
+            | SideAct::Redo
+            | SideAct::Delete
+            | SideAct::Rotate
+            | SideAct::Flip(_) => Tint::Edit,
+            SideAct::New | SideAct::Open | SideAct::Save | SideAct::Import | SideAct::Export => {
+                Tint::File
+            }
+            SideAct::Toolpaths | SideAct::Sim => Tint::Ops,
+            SideAct::Tools | SideAct::Settings => Tint::Set,
+        }
+    }
 }
 
 pub(crate) struct SideEntry {
@@ -466,33 +543,43 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
 }
 
 fn sidebar_buttons(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
-    ui.spacing_mut().item_spacing = egui::vec2(SIDEBAR_GAP, SIDEBAR_GAP);
+    ui.spacing_mut().item_spacing = egui::vec2(SIDEBAR_COL_GAP, SIDEBAR_ROW_GAP);
     let groups = sidebar_groups(app, ctx);
     let mut clicked = None;
-    for (g, group) in groups.into_iter().enumerate() {
-        if g > 0 {
-            ui.separator();
-        }
-        // two per row; an odd group leaves its last cell empty
-        for row in group.chunks(2) {
-            ui.horizontal(|ui| {
-                for e in row {
-                    if side_button(
-                        ui,
-                        e.glyph,
-                        e.name,
-                        e.shortcut.clone(),
-                        e.enabled,
-                        e.selected,
-                    )
-                    .clicked()
-                    {
-                        clicked = Some(e.act);
-                    }
+    egui::Frame::NONE
+        .inner_margin(egui::Margin {
+            left: SIDEBAR_PAD_LEFT as i8,
+            right: 0,
+            top: 6,
+            bottom: 6,
+        })
+        .show(ui, |ui| {
+            for (g, group) in groups.into_iter().enumerate() {
+                if g > 0 {
+                    ui.separator();
                 }
-            });
-        }
-    }
+                // two per row; an odd group leaves its last cell empty
+                for row in group.chunks(2) {
+                    ui.horizontal(|ui| {
+                        for e in row {
+                            if side_button(
+                                ui,
+                                e.glyph,
+                                e.name,
+                                e.shortcut.clone(),
+                                e.enabled,
+                                e.selected,
+                                e.tint(),
+                            )
+                            .clicked()
+                            {
+                                clicked = Some(e.act);
+                            }
+                        }
+                    });
+                }
+            }
+        });
     let s = &mut app.state;
     match clicked {
         None => {}

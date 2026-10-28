@@ -1,5 +1,5 @@
-//! Phosphor icon font (regular, MIT): https://unpkg.com/@phosphor-icons/web@2.1.2/src/regular/Phosphor.ttf
-//! Codepoints from the `style.css` of the same release; see `assets/README.md`.
+//! Phosphor icon font (fill, MIT): https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/Phosphor-Fill.ttf
+//! Codepoints from the `style.css` of the same release (fill = regular for these 23); see `assets/README.md`.
 
 use eframe::egui::{self, FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 
@@ -36,8 +36,8 @@ pub const ALL: [&str; 23] = [
 /// Adds Phosphor as the lowest-priority fallback of the proportional family (Private Use Area, no clash with text).
 pub fn install(ctx: &egui::Context) {
     ctx.add_font(FontInsert::new(
-        "phosphor",
-        FontData::from_static(include_bytes!("../assets/Phosphor.ttf")),
+        "phosphor-fill",
+        FontData::from_static(include_bytes!("../assets/Phosphor-Fill.ttf")),
         vec![InsertFontFamily {
             family: FontFamily::Proportional,
             priority: FontPriority::Lowest,
@@ -49,7 +49,7 @@ pub fn install(ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    /// M10a.2 test 13.
+    /// M10a.2 test 13, M18: every constant has a glyph in Phosphor-Fill.ttf.
     #[test]
     fn every_icon_has_a_glyph() {
         let mut h = egui_kittest::Harness::new_ui(|ui| {
