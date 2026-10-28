@@ -16,6 +16,8 @@ mod m10a2_verify;
 mod m10b_verify;
 #[cfg(test)]
 mod m15_verify;
+#[cfg(test)]
+mod m16_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -948,7 +950,7 @@ mod kittest {
         side(h, name).accesskit_node().is_disabled()
     }
 
-    const SIDEBAR: [&str; 21] = [
+    const SIDEBAR: [&str; 22] = [
         "New",
         "Open project…",
         "Save",
@@ -964,6 +966,7 @@ mod kittest {
         "Line",
         "Rectangle",
         "Circle",
+        "Round corners",
         "Set origin",
         "Zoom to fit",
         "Show toolpaths",
@@ -1048,6 +1051,7 @@ mod kittest {
             ("Rectangle", state::CanvasTool::Rect),
             ("Circle", state::CanvasTool::Circle),
             ("Text", state::CanvasTool::Text),
+            ("Round corners", state::CanvasTool::Fillet),
             ("Set origin", state::CanvasTool::SetOrigin),
         ];
         for (name, tool) in tools.iter().rev() {
@@ -1190,6 +1194,107 @@ mod kittest {
         h.drop_at(p + egui::vec2(60.0, 0.0));
         h.run();
         h.run();
+    }
+
+    /// A sharp 30 x 10 rect with a fixed view (2 px/mm); returns the id.
+    fn fillet_harness(select: bool) -> (Harness<'static, App>, u64) {
+        let mut s = AppState::new(None);
+        let id = s
+            .add_shape(state::Shape::Rect {
+                min: P::new(0.0, 0.0),
+                w: 30.0,
+                h: 10.0,
+                r: 0.0,
+            })
+            .unwrap()[0];
+        if !select {
+            s.clear_selection();
+        }
+        let mut h = harness_for(s);
+        h.run();
+        let st = &mut h.state_mut().state;
+        st.fit_pending = false;
+        st.view = view::View {
+            zoom: 2.0,
+            offset: egui::vec2(100.0, 500.0),
+        };
+        h.run();
+        (h, id)
+    }
+
+    fn seg_count(h: &Harness<App>, id: u64) -> usize {
+        match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => c.segments.len(),
+            hc_project::Geom::Point(_) => panic!(),
+        }
+    }
+
+    /// M16 K1 (no keyboard shortcut: N does nothing).
+    #[test]
+    fn m16_k1_sidebar_tool_and_form() {
+        let (mut h, _) = fillet_harness(false);
+        click_side(&mut h, "Round corners");
+        assert_eq!(h.state().state.tool, state::CanvasTool::Fillet);
+        assert!(toggled(&side(&h, "Round corners")));
+        assert!(h.query_all_by_label("Round corners").count() >= 2); // sidebar + Properties title
+        assert!(h.query_by_label("Radius").is_some());
+        assert_eq!(h.state().state.draw.fillet_r, 2.0);
+        assert!(egui_kittest::kittest::NodeT::accesskit_node(
+            &h.get_by_label("Round all corners of selection")
+        )
+        .is_disabled());
+    }
+
+    #[test]
+    fn m16_n_key_does_nothing() {
+        let (mut h, _) = fillet_harness(false);
+        h.hover_at(egui::pos2(640.0, 400.0));
+        h.run();
+        h.key_press(egui::Key::N);
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Select);
+    }
+
+    /// M16 K2.
+    #[test]
+    fn m16_k2_round_all_button() {
+        let (mut h, id) = fillet_harness(true);
+        click_side(&mut h, "Round corners");
+        let n = h.state().state.undo.len();
+        h.get_by_label("Round all corners of selection").click();
+        h.run();
+        h.run();
+        let s = &h.state().state;
+        assert_eq!(seg_count(&h, id), 8);
+        assert!(matches!(
+            s.item_shape(id),
+            Some(state::Shape::Rect { r, .. }) if (r - 2.0).abs() < 1e-6
+        ));
+        assert_eq!(s.undo.len(), n + 1);
+    }
+
+    /// M16 K3.
+    #[test]
+    fn m16_k3_click_corner_and_undo() {
+        let (mut h, id) = fillet_harness(false);
+        click_side(&mut h, "Round corners");
+        let at = to_s(&h, P::new(30.0, 0.0));
+        h.hover_at(at);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run();
+        }
+        h.run();
+        assert_eq!(seg_count(&h, id), 5);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert_eq!(seg_count(&h, id), 4);
     }
 
     #[test]

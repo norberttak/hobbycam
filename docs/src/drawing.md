@@ -10,6 +10,7 @@ Pick a tool in the **Draw** menu or the sidebar. The status bar tells you what t
 - **Rectangle** (`R`): click one corner, then the opposite corner.
 - **Circle** (`C`): click the centre, then a point on the circle.
 - **Text** (`T`): click the start of the baseline.
+- **Round corners**: see below.
 
 ![Drawing a rectangle from a snapped point](images/drawing.png)
 
@@ -50,6 +51,10 @@ On very large drawings the status bar says "Intersection snaps off: drawing too 
   it with a box to move it.
 
 ![Editing a circle in Properties](images/edit-circle.png)
+
+## Round corners
+
+**Round corners** (sidebar or Draw menu) rounds sharp corners with an arc of the **Radius** set in Properties. Click a corner (the highlighted corner shows the arc it will get), or select contours first and click **Round all corners of selection**. It works on drawn and imported geometry. Only corners between two straight lines are rounded; corners next to an arc, corners that are already smooth and the ends of open lines are left alone. When the radius does not fit (the sides are too short), the corner is skipped and a message says how many were skipped and why (a click says the largest radius that fits). Undo reverts it; operations and tabs stay on the item. A sharp rectangle rounded at all four corners is edited as a rectangle with that Corner radius.
 
 ## Changing the selection
 

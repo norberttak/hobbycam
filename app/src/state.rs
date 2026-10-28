@@ -4,7 +4,8 @@ use crate::hit;
 use crate::snap::{self, Snap, SnapCache};
 use crate::view::View;
 use hc_dxf::{ImportOptions, ImportWarning};
-use hc_geom::{shapes, BBox, Contour, Point, Transform, EPS};
+use hc_geom::fillet::{self, FilletSkip};
+use hc_geom::{shapes, BBox, Contour, Point, Segment, Transform, EPS};
 use hc_post::GcodeFile;
 use hc_project::{
     fmt_len, Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Stock,
@@ -123,6 +124,7 @@ pub enum CanvasTool {
     Rect,
     Circle,
     Text,
+    Fillet,
 }
 
 impl CanvasTool {
@@ -138,6 +140,7 @@ impl CanvasTool {
             (CanvasTool::Circle, false) => "Circle: click the center",
             (CanvasTool::Circle, true) => "Circle: click a point on the circle",
             (CanvasTool::Text, _) => "Text: click the start of the baseline",
+            (CanvasTool::Fillet, _) => "Round corners: click a sharp corner",
         })
     }
 }
@@ -166,6 +169,16 @@ pub enum Shape {
         font: hc_text::Font,
         height: f64,
     },
+}
+
+/// The corner under the cursor for the Round corners tool.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilletHover {
+    pub item: u64,
+    pub joint: usize,
+    pub vertex: Point,
+    /// The arc that a click would add, or why it would not.
+    pub result: Result<Segment, FilletSkip>,
 }
 
 /// An element drag in progress (Select tool, see `start_move`).
@@ -197,6 +210,8 @@ pub struct DrawForm {
     pub font: hc_text::Font,
     /// Text cap height.
     pub height: f64,
+    /// Round corners radius (mm).
+    pub fillet_r: f64,
 }
 
 impl Default for DrawForm {
@@ -211,6 +226,7 @@ impl Default for DrawForm {
             text: "HobbyCAM".to_string(),
             font: hc_text::Font::Hershey,
             height: 10.0,
+            fillet_r: 2.0,
         }
     }
 }
@@ -239,7 +255,7 @@ impl DrawForm {
                 font: self.font,
                 height: self.height,
             }),
-            CanvasTool::Select | CanvasTool::SetOrigin => None,
+            CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Fillet => None,
         }
     }
 }
@@ -938,7 +954,7 @@ impl AppState {
     /// A primary click of the active tool at `p` (already snapped when `snapped`).
     pub fn canvas_click(&mut self, p: Point, snapped: bool) {
         match self.tool {
-            CanvasTool::Select => {}
+            CanvasTool::Select | CanvasTool::Fillet => {} // Fillet: the canvas calls fillet_click
             CanvasTool::SetOrigin => {
                 if snapped {
                     self.set_origin(WorkOrigin::Point(p));
@@ -973,6 +989,145 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Nearest joint (`fillet::joints`) of a visible contour item within `tol` of `p` (first item wins ties),
+    /// with `fillet_corner(c, joint, self.draw.fillet_r)`.
+    pub fn fillet_hover(&self, p: Point, tol: f64) -> Option<FilletHover> {
+        let mut best: Option<(f64, u64, usize, Point)> = None;
+        for it in self.project.items.iter().filter(|i| self.is_visible(i)) {
+            let Geom::Contour(c) = &it.geom else { continue };
+            for (k, v) in fillet::joints(c) {
+                let d = v.distance(p);
+                if d <= tol && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, it.id, k, v));
+                }
+            }
+        }
+        let (_, item, joint, vertex) = best?;
+        let Some(Geom::Contour(c)) = self.item(item).map(|i| &i.geom) else {
+            return None;
+        };
+        let result = fillet::fillet_corner(c, joint, self.draw.fillet_r).map(|(_, arc)| arc);
+        Some(FilletHover {
+            item,
+            joint,
+            vertex,
+            result,
+        })
+    }
+
+    /// Round corners click: no joint within `tol` -> nothing. Ok -> item rounded, Err -> one Warning.
+    pub fn fillet_click(&mut self, p: Point, tol: f64) {
+        let Some(h) = self.fillet_hover(p, tol) else {
+            return;
+        };
+        let Some(Geom::Contour(c)) = self.item(h.item).map(|i| &i.geom) else {
+            return;
+        };
+        match fillet::fillet_corner(c, h.joint, self.draw.fillet_r) {
+            Ok((new, _)) => self.replace_contour(h.item, new),
+            Err(e) => {
+                let text = match e {
+                    FilletSkip::BadRadius => "Radius must be greater than 0".to_string(),
+                    FilletSkip::NotSharp => "Not a sharp corner".to_string(),
+                    FilletSkip::NotLines => "Corner skipped: not between two straight lines".into(),
+                    FilletSkip::TooLarge { max_r } => format!(
+                        "Corner skipped: radius too large (at most {})",
+                        fmt_len(max_r, self.project.units)
+                    ),
+                };
+                self.msg(Severity::Warning, text);
+            }
+        }
+    }
+
+    /// "Round all corners of selection": fillet_all on every selected contour item (points skipped), then one message.
+    /// Empty selection: no-op, no message.
+    pub fn fillet_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let r = self.draw.fillet_r;
+        if !(r.is_finite() && r >= EPS) {
+            self.msg(Severity::Warning, "Radius must be greater than 0");
+            return;
+        }
+        let (mut rounded, mut not_lines, mut too_large) = (0, 0, 0);
+        let mut changes = Vec::new();
+        for it in &self.project.items {
+            let Geom::Contour(c) = &it.geom else { continue };
+            if !self.selection.contains(&it.id) {
+                continue;
+            }
+            let f = fillet::fillet_all(c, r);
+            (rounded, not_lines, too_large) = (
+                rounded + f.rounded,
+                not_lines + f.not_lines,
+                too_large + f.too_large,
+            );
+            if f.rounded > 0 {
+                changes.push((it.id, f.contour));
+            }
+        }
+        for (id, c) in changes {
+            self.replace_contour(id, c);
+        }
+        let corners = |n: usize| {
+            if n == 1 {
+                "1 corner".to_string()
+            } else {
+                format!("{n} corners")
+            }
+        };
+        let skipped = not_lines + too_large;
+        if rounded == 0 && skipped == 0 {
+            self.msg(Severity::Info, "No sharp corners in the selection");
+        } else if skipped == 0 {
+            self.msg(Severity::Info, format!("Rounded {}", corners(rounded)));
+        } else {
+            let mut parts = Vec::new();
+            if too_large > 0 {
+                parts.push(format!("radius too large: {too_large}"));
+            }
+            if not_lines > 0 {
+                parts.push(format!("not between two straight lines: {not_lines}"));
+            }
+            self.msg(
+                Severity::Warning,
+                format!(
+                    "Rounded {}; skipped {skipped} ({})",
+                    corners(rounded),
+                    parts.join(", ")
+                ),
+            );
+        }
+    }
+
+    /// Sets item `id`'s contour to `new` and remaps every op's manual tabs of `id` by nearest point.
+    fn replace_contour(&mut self, id: u64, new: Contour) {
+        let Some(item) = self.project.items.iter_mut().find(|i| i.id == id) else {
+            return;
+        };
+        let Geom::Contour(old) = std::mem::replace(&mut item.geom, Geom::Contour(new.clone()))
+        else {
+            return;
+        };
+        let (old_len, new_len) = (old.length(), new.length());
+        for mt in self
+            .project
+            .operations
+            .iter_mut()
+            .flat_map(|o| o.tabs.manual.iter_mut())
+            .filter(|m| m.item == id)
+        {
+            for t in &mut mt.positions {
+                let at = old.point_at(t.rem_euclid(1.0) * old_len);
+                *t = (new.closest(at).0 / new_len).rem_euclid(1.0);
+            }
+        }
+        self.items_changed();
+        self.dirty = true;
     }
 
     /// Validates and adds the shape on layer Drawing; the new items become the selection.
@@ -1761,7 +1916,7 @@ pub(crate) mod tests {
         c
     }
 
-    fn op_on(s: &mut AppState, items: Vec<u64>, kind: NewKind, tool: u32) -> u64 {
+    pub fn op_on(s: &mut AppState, items: Vec<u64>, kind: NewKind, tool: u32) -> u64 {
         s.selection = items.into_iter().collect();
         s.new_operation(kind, tool).unwrap()
     }

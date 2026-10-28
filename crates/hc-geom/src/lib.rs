@@ -4,6 +4,7 @@
 mod bbox;
 mod chain;
 mod contour;
+pub mod fillet;
 mod point;
 mod segment;
 pub mod shapes;
