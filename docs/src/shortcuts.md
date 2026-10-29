@@ -20,7 +20,7 @@ These keys work with the mouse over the canvas and no text field active:
 
 | Action | Key |
 |---|---|
-| Select (also cancels the active tool or the first click) | `Esc` |
+| Select (also cancels the active tool, the first click or a measurement) | `Esc` |
 | Line | `L` |
 | Rectangle | `R` |
 | Circle | `C` |
@@ -58,7 +58,7 @@ From top to bottom, two buttons per row:
 | Text | `T` |
 | Round corners | – |
 | Set origin | `O` |
-| Zoom to fit | `F` |
+| Measure | – |
 | Undo | `Cmd/Ctrl+Z` |
 | Redo | `Cmd/Ctrl+Shift+Z` |
 | Delete selection | `Del` |
@@ -70,6 +70,7 @@ From top to bottom, two buttons per row:
 | Save | `Cmd/Ctrl+S` |
 | Import DXF… | `Cmd/Ctrl+I` |
 | Export G-code… | `Cmd/Ctrl+E` |
+| Zoom to fit | `F` |
 | Show toolpaths | – |
 | Simulation | – |
 | Tool library… | – |

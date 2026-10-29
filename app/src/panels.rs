@@ -1,6 +1,9 @@
 //! Menu, side panels, message panel and status bar. All edits go through `AppState`.
 
-use crate::state::{kind_label, CanvasTool, MoveDir, NewKind, Severity, Shape};
+use crate::state::{
+    fmt_angle, kind_label, measure_angle, measure_summary, CanvasTool, MoveDir, NewKind, Severity,
+    Shape,
+};
 use crate::theme;
 use crate::{aci, icons, App, Pending};
 use eframe::egui::{self, KeyboardShortcut, Modifiers, Ui};
@@ -195,6 +198,7 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 tool_item(app, ui, "Circle", "C", CanvasTool::Circle);
                 tool_item(app, ui, "Text", "T", CanvasTool::Text);
                 tool_item(app, ui, "Round corners", "", CanvasTool::Fillet);
+                tool_item(app, ui, "Measure", "", CanvasTool::Measure);
                 ui.separator();
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
             });
@@ -383,7 +387,7 @@ impl SideEntry {
     pub(crate) fn tint(&self) -> theme::Tint {
         use theme::Tint;
         match self.act {
-            SideAct::Tool(CanvasTool::SetOrigin) | SideAct::Fit => Tint::View,
+            SideAct::Tool(CanvasTool::SetOrigin | CanvasTool::Measure) | SideAct::Fit => Tint::View,
             SideAct::Tool(_) => Tint::Draw,
             SideAct::Undo
             | SideAct::Redo
@@ -460,7 +464,7 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
             tool(icons::TEXT, "Text", "T", CanvasTool::Text),
             tool(icons::FILLET, "Round corners", "", CanvasTool::Fillet),
             tool(icons::ORIGIN, "Set origin", "O", CanvasTool::SetOrigin),
-            entry(icons::FIT, "Zoom to fit", key("F"), SideAct::Fit),
+            tool(icons::MEASURE, "Measure", "", CanvasTool::Measure),
         ],
         vec![
             when(
@@ -519,6 +523,7 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
                 sc(&SC_EXPORT),
                 SideAct::Export,
             ),
+            entry(icons::FIT, "Zoom to fit", key("F"), SideAct::Fit),
         ],
         vec![
             toggle(
@@ -723,6 +728,10 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
                     fmt_len(m.delta.x, u),
                     fmt_len(m.delta.y, u)
                 ));
+            }
+            if let Some((a, b)) = s.measure_live() {
+                ui.separator();
+                ui.label(measure_summary(a, b, u));
             }
             if let Some(h) = s.tool.hint(s.pending.is_some()) {
                 ui.separator();
@@ -1092,6 +1101,7 @@ pub fn right(app: &mut App, ui: &mut Ui) {
                     .and_then(|id| app.state.project.operations.iter().find(|o| o.id == id))
                     .cloned();
                 match op {
+                    _ if app.state.tool == CanvasTool::Measure => measure_form(app, ui),
                     _ if !matches!(app.state.tool, CanvasTool::Select | CanvasTool::SetOrigin) => {
                         draw_form(app, ui)
                     }
@@ -1249,6 +1259,40 @@ fn tabs_group(ui: &mut Ui, tabs: &mut hc_project::Tabs, u: Units) -> bool {
         });
     });
     reset
+}
+
+/// Read-only Measure read-out in Properties (writes nothing).
+fn measure_form(app: &mut App, ui: &mut Ui) {
+    let s = &app.state;
+    let u = s.project.units;
+    ui.group(|ui| {
+        ui.strong("Measure");
+        if let Some((a, b)) = s.measure_live() {
+            egui::Grid::new("measure_form")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    let d = b - a;
+                    let angle = fmt_angle(measure_angle(a, b));
+                    let rows = [
+                        ("A X", fmt_len(a.x, u)),
+                        ("A Y", fmt_len(a.y, u)),
+                        ("B X", fmt_len(b.x, u)),
+                        ("B Y", fmt_len(b.y, u)),
+                        ("Distance", fmt_len(d.length(), u)),
+                        ("ΔX", fmt_len(d.x, u)),
+                        ("ΔY", fmt_len(d.y, u)),
+                        ("Angle", angle),
+                    ];
+                    for (k, v) in rows {
+                        ui.label(k);
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
+        }
+        ui.weak(s.tool.hint(s.pending.is_some()).unwrap_or_default());
+        ui.weak("Drawing coordinates; not saved");
+    });
 }
 
 /// Numeric input of the active drawing tool; canvas clicks write into the same fields.

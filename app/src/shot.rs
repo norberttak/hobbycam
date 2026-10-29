@@ -455,7 +455,7 @@ fn docs_harness(mut app: App) -> Harness<'static, App> {
         .build_ui_state(|ui, app: &mut App| app.show(ui), app)
 }
 
-/// M11: the 12 pictures of the user manual.
+/// M11: the 13 pictures of the user manual.
 /// Run from the repository root: HOBBYCAM_SHOT_DIR=$PWD/docs/src/images cargo test -p hobbycam shot_docs -- --ignored
 #[test]
 #[ignore]
@@ -568,4 +568,12 @@ fn shot_docs() {
         state::tests::pocket_center,
         crate::snap::SnapKind::Center,
     );
+
+    let (mut s, _) = bracket_clean();
+    s.selected_op = None;
+    s.set_tool(state::CanvasTool::Measure);
+    s.measure = Some((bottom_left_corner(&s), state::tests::pocket_center(&s)));
+    run(App::new(s), "measure", &|h| {
+        assert!(h.query_by_label_contains("Distance ").is_some());
+    });
 }

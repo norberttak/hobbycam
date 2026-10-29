@@ -369,7 +369,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     }
 
     if s.tool != CanvasTool::Select {
-        tool_overlay(s, ui, painter, rect, pal.snap);
+        tool_overlay(s, ui, painter, rect, pal.snap, pal.measure);
     }
 
     // selection box
@@ -407,8 +407,69 @@ fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, text: &str, col: Color32) {
     );
 }
 
-fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: Color32) {
+const RULER_TICK_PX: f32 = 6.0;
+const RULER_GAP_PX: f32 = 8.0;
+
+/// Centre of a label box of `size` beside the screen segment a–b: on the upper side (screen y up; the left side for
+/// a vertical line), its nearest edge RULER_GAP_PX from the line. Same result for a–b and b–a.
+fn ruler_label_center(a: Pos2, b: Pos2, size: Vec2) -> Pos2 {
+    let d = b - a;
+    let u = d / d.length();
+    let mut n = Vec2::new(-u.y, u.x);
+    if n.y > 0.0 || (n.y == 0.0 && n.x > 0.0) {
+        n = -n;
+    }
+    let ext = RULER_GAP_PX + n.x.abs() * size.x / 2.0 + n.y.abs() * size.y / 2.0;
+    a + d / 2.0 + n * ext
+}
+
+/// Dimension line a–b with perpendicular end ticks and the `text` label on a filled box (screen px, any zoom).
+/// Shorter than 1 px: only a small circle at a, no label.
+fn ruler(painter: &Painter, ui: &Ui, a: Pos2, b: Pos2, text: &str, col: Color32) {
+    let st = Stroke::new(1.5, col);
+    let len = (b - a).length();
+    if len < 1.0 {
+        painter.circle_stroke(a, 3.0, st);
+        return;
+    }
+    let u = (b - a) / len;
+    let n = Vec2::new(-u.y, u.x);
+    painter.line_segment([a, b], st);
+    for p in [a, b] {
+        painter.line_segment([p - n * RULER_TICK_PX, p + n * RULER_TICK_PX], st);
+    }
+    let g = painter.layout_no_wrap(
+        text.to_string(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        col,
+    );
+    let size = g.size() + Vec2::new(8.0, 4.0);
+    let r = Rect::from_center_size(ruler_label_center(a, b, size), size);
+    painter.rect_filled(r, 3.0, ui.visuals().extreme_bg_color);
+    painter.rect_stroke(r, 3.0, Stroke::new(1.0, col), egui::StrokeKind::Inside);
+    painter.galley(r.center() - g.size() / 2.0, g, col);
+}
+
+fn tool_overlay(
+    s: &AppState,
+    ui: &Ui,
+    painter: &Painter,
+    rect: Rect,
+    snap_col: Color32,
+    measure_col: Color32,
+) {
     let v = &s.view;
+    if let Some((a, b)) = s.measure_live() {
+        let txt = hc_project::fmt_len(a.distance(b), s.project.units);
+        ruler(
+            painter,
+            ui,
+            v.world_to_screen(rect, a),
+            v.world_to_screen(rect, b),
+            &txt,
+            measure_col,
+        );
+    }
     let Some(cursor) = s.cursor else { return };
     if s.tool == CanvasTool::Fillet {
         if let Some(h) = s.fillet_hover(cursor, SNAP_PX / v.zoom as f64) {
@@ -480,9 +541,11 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: 
                 ARC_TOL_PX / v.zoom as f64,
             )
         }
-        CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Text | CanvasTool::Fillet => {
-            return
-        }
+        CanvasTool::Select
+        | CanvasTool::SetOrigin
+        | CanvasTool::Text
+        | CanvasTool::Fillet
+        | CanvasTool::Measure => return,
     };
     let pts: Vec<Pos2> = world
         .into_iter()
@@ -681,5 +744,23 @@ mod tests {
         assert_eq!(depth_color(-20.0, 10.0), Color32::from_rgb(170, 40, 40));
         assert_eq!(depth_color(-5.0, 10.0), Color32::from_rgb(213, 125, 60));
         assert_eq!(depth_color(-1.0, 0.0), Color32::from_rgb(170, 40, 40));
+    }
+
+    /// M19 R1: label placement beside the ruler.
+    #[test]
+    fn r1_ruler_label_center() {
+        let sz = Vec2::new(40.0, 16.0);
+        let c = |a: (f32, f32), b: (f32, f32), e: (f32, f32)| {
+            let p = ruler_label_center(Pos2::new(a.0, a.1), Pos2::new(b.0, b.1), sz);
+            assert!(
+                (p.x - e.0).abs() < 1e-3 && (p.y - e.1).abs() < 1e-3,
+                "{p:?} vs {e:?}"
+            );
+        };
+        c((0., 0.), (100., 0.), (50., -16.));
+        c((100., 0.), (0., 0.), (50., -16.));
+        c((0., 0.), (0., 100.), (-28., 50.));
+        c((0., 100.), (0., 0.), (-28., 50.));
+        c((0., 0.), (100., 100.), (69.657, 30.343));
     }
 }

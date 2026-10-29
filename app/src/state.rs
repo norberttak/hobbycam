@@ -125,6 +125,7 @@ pub enum CanvasTool {
     Circle,
     Text,
     Fillet,
+    Measure,
 }
 
 impl CanvasTool {
@@ -141,6 +142,8 @@ impl CanvasTool {
             (CanvasTool::Circle, true) => "Circle: click a point on the circle",
             (CanvasTool::Text, _) => "Text: click the start of the baseline",
             (CanvasTool::Fillet, _) => "Round corners: click a sharp corner",
+            (CanvasTool::Measure, false) => "Measure: click the first point",
+            (CanvasTool::Measure, true) => "Measure: click the second point",
         })
     }
 }
@@ -255,7 +258,10 @@ impl DrawForm {
                 font: self.font,
                 height: self.height,
             }),
-            CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Fillet => None,
+            CanvasTool::Select
+            | CanvasTool::SetOrigin
+            | CanvasTool::Fillet
+            | CanvasTool::Measure => None,
         }
     }
 }
@@ -320,8 +326,10 @@ pub struct AppState {
     pub tool: CanvasTool,
     pub draw: DrawForm,
     pub xform: XformForm,
-    /// First click of a two-click drawing tool.
+    /// First click of a two-click tool (Line, Rect, Circle, Measure).
     pub pending: Option<Point>,
+    /// Measure tool: the fixed A → B (temporary, not saved, no undo).
+    pub measure: Option<(Point, Point)>,
     /// Element drag in progress.
     pub moving: Option<MoveDrag>,
     /// (item index, point, kind), rebuilt in `items_changed`.
@@ -376,6 +384,7 @@ impl AppState {
             draw: DrawForm::default(),
             xform: XformForm::default(),
             pending: None,
+            measure: None,
             moving: None,
             snap_cache: SnapCache::default(),
             undo: Vec::new(),
@@ -488,6 +497,7 @@ impl AppState {
         self.items_changed();
         self.fit_pending = true;
         self.pending = None;
+        self.measure = None;
         self.moving = None;
         self.undo.clear();
         self.redo.clear();
@@ -924,6 +934,7 @@ impl AppState {
         }
         self.tool = t;
         self.pending = None;
+        self.measure = None;
     }
 
     /// Escape: cancels a move drag, else drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
@@ -932,6 +943,8 @@ impl AppState {
             self.cancel_move();
         } else if self.pending.is_some() {
             self.pending = None;
+        } else if self.measure.is_some() {
+            self.measure = None;
         } else if self.tool != CanvasTool::Select {
             self.tool = CanvasTool::Select;
         } else {
@@ -939,6 +952,22 @@ impl AppState {
             self.selected_tab = None;
             self.selected_op = None;
         }
+    }
+
+    /// The measurement to show: the fixed one, else (pending A, cursor snapped like a click) while the cursor is on
+    /// the canvas. None outside the Measure tool.
+    pub fn measure_live(&self) -> Option<(Point, Point)> {
+        if self.tool != CanvasTool::Measure {
+            return None;
+        }
+        if self.measure.is_some() {
+            return self.measure;
+        }
+        let (a, c) = (self.pending?, self.cursor?);
+        let b = self
+            .snap_at(c, snap::SNAP_PX / self.view.zoom as f64)
+            .map_or(c, |sn| sn.p);
+        Some((a, b))
     }
 
     pub fn snap_at(&self, p: Point, radius: f64) -> Option<Snap> {
@@ -955,6 +984,13 @@ impl AppState {
     pub fn canvas_click(&mut self, p: Point, snapped: bool) {
         match self.tool {
             CanvasTool::Select | CanvasTool::Fillet => {} // Fillet: the canvas calls fillet_click
+            CanvasTool::Measure => match self.pending.take() {
+                None => {
+                    self.pending = Some(p);
+                    self.measure = None;
+                }
+                Some(a) => self.measure = Some((a, p)),
+            },
             CanvasTool::SetOrigin => {
                 if snapped {
                     self.set_origin(WorkOrigin::Point(p));
@@ -1370,6 +1406,7 @@ impl AppState {
             .selected_op
             .filter(|id| ops.iter().any(|o| o.id == *id));
         self.pending = None;
+        self.measure = None;
         self.moving = None;
         self.dirty = self.project != self.saved;
     }
@@ -1789,6 +1826,43 @@ fn visible_char(c: char) -> String {
     } else {
         format!("U+{:04X}", c as u32)
     }
+}
+
+/// Direction a → b in degrees CCW from +X, in [0, 360); None when |b − a| < 1e-9 mm.
+pub fn measure_angle(a: Point, b: Point) -> Option<f64> {
+    let d = b - a;
+    (d.length() >= 1e-9).then(|| {
+        let a = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
+        // rem_euclid of a tiny negative angle rounds to 360.0
+        if a >= 360.0 {
+            0.0
+        } else {
+            a
+        }
+    })
+}
+
+/// "53.13°", "0.00°" for anything that rounds to 360.00, "–" for None.
+pub fn fmt_angle(a: Option<f64>) -> String {
+    match a {
+        None => "–".to_string(),
+        Some(d) => match format!("{d:.2}°") {
+            s if s == "360.00°" => "0.00°".to_string(),
+            s => s,
+        },
+    }
+}
+
+/// Status bar text, e.g. "Distance 50.000 mm · ΔX 30.000 mm · ΔY 40.000 mm · Angle 53.13°".
+pub fn measure_summary(a: Point, b: Point, u: Units) -> String {
+    let d = b - a;
+    format!(
+        "Distance {} · ΔX {} · ΔY {} · Angle {}",
+        fmt_len(d.length(), u),
+        fmt_len(d.x, u),
+        fmt_len(d.y, u),
+        fmt_angle(measure_angle(a, b))
+    )
 }
 
 pub fn warning_text(w: &ImportWarning) -> String {

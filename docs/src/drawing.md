@@ -11,6 +11,7 @@ Pick a tool in the **Draw** menu or the sidebar. The status bar tells you what t
 - **Circle** (`C`): click the centre, then a point on the circle.
 - **Text** (`T`): click the start of the baseline.
 - **Round corners**: see below.
+- **Measure**: see below.
 
 ![Drawing a rectangle from a snapped point](images/drawing.png)
 
@@ -55,6 +56,18 @@ On very large drawings the status bar says "Intersection snaps off: drawing too 
 ## Round corners
 
 **Round corners** (sidebar or Draw menu) rounds sharp corners with an arc of the **Radius** set in Properties. Click a corner (the highlighted corner shows the arc it will get), or select contours first and click **Round all corners of selection**. It works on drawn and imported geometry. Only corners between two straight lines are rounded; corners next to an arc, corners that are already smooth and the ends of open lines are left alone. When the radius does not fit (the sides are too short), the corner is skipped and a message says how many were skipped and why (a click says the largest radius that fits). Undo reverts it; operations and tabs stay on the item. A sharp rectangle rounded at all four corners is edited as a rectangle with that Corner radius.
+
+## Measure
+
+**Measure** (sidebar or Draw menu) shows the distance between two points. Click the first point, move the mouse
+(a ruler follows the cursor) and click the second point. Both clicks snap like the drawing tools (line ends,
+corners, circle centres, …); without a snap the clicked point is used. The ruler shows the distance, the status bar
+and Properties show the distance, ΔX, ΔY (second point minus first) and the angle (degrees counter-clockwise from
+the X axis, 0–360). Values follow the units in Settings; X/Y are drawing coordinates. A new click starts a new
+measurement; `Esc` clears it (press again to leave the tool). Measurements are not saved and do not change the
+project.
+
+![Measuring between a corner and a circle centre](images/measure.png)
 
 ## Changing the selection
 

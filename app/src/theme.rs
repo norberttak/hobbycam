@@ -174,6 +174,8 @@ pub struct CanvasPalette {
     pub feed: Color32,
     /// Rapids and the stock outline.
     pub muted: Color32,
+    /// Measure ruler and its label.
+    pub measure: Color32,
 }
 
 pub fn canvas_palette(dark: bool) -> CanvasPalette {
@@ -185,6 +187,7 @@ pub fn canvas_palette(dark: bool) -> CanvasPalette {
             snap: hex(0x22D3EE),
             feed: hex(0x5B9BFF),
             muted: hex(0x94A3B8),
+            measure: hex(0xF472B6),
         }
     } else {
         CanvasPalette {
@@ -192,6 +195,7 @@ pub fn canvas_palette(dark: bool) -> CanvasPalette {
             grid_major: hex(0xC9D1DC),
             selected: hex(0xFF7A00),
             snap: hex(0x00B8D9),
+            measure: hex(0xDB2777),
             feed: hex(0x1D6FE0),
             muted: hex(0x64748B),
         }

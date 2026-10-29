@@ -222,6 +222,20 @@ Spec: `specs/M18.md` (option B3 of `specs/M18-mockup.html`). Branch `feature/ui-
 - Step 2: implement the chosen option.
 - Docs: screenshots in `docs/src/images/` regenerated (`shot_docs`), `interface.md` if names change.
 
+## Version 0.3.0
+
+Same rules as 0.2.0: one branch and PR per milestone, precise specs for the Sonnet coder/tester, docs kept in sync by
+`app/src/docs_check.rs`.
+
+### M19 – Measure tool
+Spec: `specs/M19.md`. Branch `feature/measure-tool`.
+- Canvas tool **Measure**: click two points (snapped like the drawing tools: line end, corner, circle centre, … or any
+  raw point); a ruler with the distance is drawn, live while moving to the second point.
+- Distance, ΔX, ΔY and angle in the status bar and the Properties pane, in the project units (mm / inch).
+- Temporary: cleared by a new measurement, `Esc` or leaving the tool; not saved, not in G-code, no undo step, no
+  dirty flag, no format change. No keyboard shortcut (sidebar + Draw menu, like Round corners).
+- Docs: `drawing.md` (+ screenshot), `shortcuts.md` (sidebar row), `interface.md`, `CHANGELOG.md`.
+
 ## Agent workflow
 
 Three subagents live in `.claude/agents/`. The main session is the orchestrator and the only one that talks to you.

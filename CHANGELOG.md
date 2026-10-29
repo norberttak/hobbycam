@@ -6,6 +6,7 @@ All notable changes to HobbyCAM are listed here. The format follows
 ## [0.3.0] - YYYY-MM-DD
 
 ### Added
+- Measure tool: shows the distance, ΔX, ΔY and angle between two snapped points (temporary, not saved).
 
 ## [0.2.0] - 2026-10-28
 
