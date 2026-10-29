@@ -1610,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "hc-dxf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dxf",
  "hc-geom",
@@ -1618,14 +1618,14 @@ dependencies = [
 
 [[package]]
 name = "hc-geom"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hc-post"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hc-geom",
  "hc-project",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "hc-project"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "directories",
  "hc-dxf",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "hc-sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hc-geom",
  "hc-project",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "hc-text"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "epaint_default_fonts",
  "hc-geom",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "hc-toolpath"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cavalier_contours",
  "hc-dxf",
@@ -1685,7 +1685,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hobbycam"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "eframe",
  "egui_kittest",

@@ -117,9 +117,9 @@ Same result as the CI job, made on your own Mac with the Developer ID certificat
 2. Download the `macos` and `windows` artifacts from the run page and check the dmg:
 
    ```sh
-   spctl -a -t open --context context:primary-signature -vv HobbyCAM-0.2.0-macos-arm64.dmg
+   spctl -a -t open --context context:primary-signature -vv HobbyCAM-0.3.0-macos-arm64.dmg
    # expect: accepted, source=Notarized Developer ID
-   xcrun stapler validate HobbyCAM-0.2.0-macos-arm64.dmg
+   xcrun stapler validate HobbyCAM-0.3.0-macos-arm64.dmg
    ```
 
 ## 5. Release
@@ -212,7 +212,7 @@ the sandbox entitlements and creates a signed installer package. It never upload
 
    ```sh
    # key file in ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8
-   xcrun altool --upload-app -f dist/HobbyCAM-0.2.0-appstore.pkg -t macos --apiKey <KEYID> --apiIssuer <ISSUER>
+   xcrun altool --upload-app -f dist/HobbyCAM-0.3.0-appstore.pkg -t macos --apiKey <KEYID> --apiIssuer <ISSUER>
    ```
 
    altool's *notarization* commands were retired in November 2023 (`notarytool` replaced them); if altool reports that
