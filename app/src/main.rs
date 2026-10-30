@@ -20,6 +20,10 @@ mod m15_verify;
 mod m16_verify;
 #[cfg(test)]
 mod m18_verify;
+#[cfg(test)]
+mod m19_verify;
+#[cfg(test)]
+mod m20_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -87,6 +91,8 @@ pub struct App {
     pub canvas_rect: egui::Rect,
     /// A left-button drag that started on a tab marker moves that tab.
     pub tab_drag: bool,
+    /// Select tool: the key point a drag would grab (computed in canvas input, drawn in paint).
+    pub grab_hover: Option<crate::snap::Snap>,
     /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
     pub export_prompt: Option<hc_toolpath::Severity>,
     /// The icon font and the theme visuals are installed (once, on the first frame).
@@ -107,6 +113,7 @@ impl App {
             box_start: None,
             canvas_rect: egui::Rect::NOTHING,
             tab_drag: false,
+            grab_hover: None,
             export_prompt: None,
             fonts_ready: false,
         }
@@ -535,10 +542,14 @@ mod kittest {
             "Origin X",
             "Origin Y",
             "Pick on drawing",
+            "Snapping",
+            "Snap to objects",
+            "Snap to grid",
         ] {
             assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         assert!(menu(&h, "Pick on drawing").rect().max.y < 800.0);
+        assert!(menu(&h, "Snap to grid").rect().max.y < 800.0);
         assert!(h.get_by_label("Settings").rect().min.x > 110.0);
     }
 
@@ -999,7 +1010,7 @@ mod kittest {
         side(h, name).accesskit_node().is_disabled()
     }
 
-    const SIDEBAR: [&str; 22] = [
+    const SIDEBAR: [&str; 23] = [
         "New",
         "Open project…",
         "Save",
@@ -1017,6 +1028,7 @@ mod kittest {
         "Circle",
         "Round corners",
         "Set origin",
+        "Measure",
         "Zoom to fit",
         "Show toolpaths",
         "Simulation",
@@ -1102,6 +1114,7 @@ mod kittest {
             ("Text", state::CanvasTool::Text),
             ("Round corners", state::CanvasTool::Fillet),
             ("Set origin", state::CanvasTool::SetOrigin),
+            ("Measure", state::CanvasTool::Measure),
         ];
         for (name, tool) in tools.iter().rev() {
             click_side(&mut h, name);
@@ -1346,13 +1359,194 @@ mod kittest {
         assert_eq!(seg_count(&h, id), 4);
     }
 
+    fn measure_harness(units: hc_project::Units) -> Harness<'static, App> {
+        let mut s = AppState::new(None);
+        s.project.units = units;
+        for sh in [
+            state::Shape::Rect {
+                min: P::new(0.0, 0.0),
+                w: 30.0,
+                h: 10.0,
+                r: 0.0,
+            },
+            state::Shape::Line {
+                a: P::new(0.0, 20.0),
+                b: P::new(20.0, 20.0),
+            },
+            state::Shape::Circle {
+                c: P::new(50.0, 5.0),
+                r: 5.0,
+            },
+        ] {
+            s.add_shape(sh).unwrap();
+        }
+        s.clear_selection();
+        s.dirty = false;
+        s.commit_undo(true);
+        let mut h = harness_for(s);
+        h.run();
+        let st = &mut h.state_mut().state;
+        st.fit_pending = false;
+        st.view = view::View {
+            zoom: 2.0,
+            offset: egui::vec2(100.0, 500.0),
+        };
+        h.run();
+        h
+    }
+
+    fn click_world(h: &mut Harness<'static, App>, p: P) {
+        let at = to_s(h, p);
+        h.hover_at(at);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run();
+        }
+        h.run();
+    }
+
+    const M_LIVE: &str = "Distance 22.361 mm · ΔX 20.000 mm · ΔY 10.000 mm · Angle 26.57°";
+    const M_FIXED: &str = "Distance 33.541 mm · ΔX 30.000 mm · ΔY -15.000 mm · Angle 333.43°";
+
+    /// Measure harness after the K2 clicks.
+    fn measured() -> (Harness<'static, App>, usize) {
+        let mut h = measure_harness(hc_project::Units::Mm);
+        let n = h.state().state.undo.len();
+        click_side(&mut h, "Measure");
+        click_world(&mut h, P::new(20.6, 20.4));
+        let a = h.state().state.pending.unwrap();
+        assert!(a.approx_eq(P::new(20.0, 20.0), 1e-9), "{a:?}");
+        h.hover_at(to_s(&h, P::new(40.0, 30.0)));
+        h.run();
+        h.get_by_label(M_LIVE);
+        click_world(&mut h, P::new(50.4, 5.3));
+        (h, n)
+    }
+
+    /// M19 K1.
+    #[test]
+    fn m19_k1_sidebar_and_form() {
+        let mut h = measure_harness(hc_project::Units::Mm);
+        click_side(&mut h, "Measure");
+        assert_eq!(h.state().state.tool, state::CanvasTool::Measure);
+        assert!(toggled(&side(&h, "Measure")));
+        assert!(h.query_all_by_label("Measure").count() >= 2);
+        h.get_by_label("Measure: click the first point");
+        h.hover_at(egui::pos2(640.0, 400.0));
+        h.run();
+        h.key_press(egui::Key::M);
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Measure);
+    }
+
+    /// M19 K2.
+    #[test]
+    fn m19_k2_snap_line_end_and_circle_centre() {
+        let (mut h, _) = measured();
+        let (a, b) = h.state().state.measure.unwrap();
+        assert!(a.approx_eq(P::new(20.0, 20.0), 1e-9));
+        assert!(b.approx_eq(P::new(50.0, 5.0), 1e-9), "{b:?}");
+        h.get_by_label(M_FIXED);
+        for l in ["A X", "ΔY", "Angle", "333.43°", "-15.000 mm"] {
+            assert!(h.query_all_by_label(l).next().is_some(), "{l}");
+        }
+        h.hover_at(egui::pos2(1200.0, 400.0));
+        h.run();
+        assert_eq!(h.state().state.measure, Some((a, b)));
+        h.get_by_label("333.43°");
+    }
+
+    /// M19 K3.
+    #[test]
+    fn m19_k3_corner_snap_inch() {
+        let mut h = measure_harness(hc_project::Units::Inch);
+        click_side(&mut h, "Measure");
+        click_world(&mut h, P::new(30.3, 0.2));
+        click_world(&mut h, P::new(0.2, 9.8));
+        let (a, b) = h.state().state.measure.unwrap();
+        assert!(a.approx_eq(P::new(30.0, 0.0), 1e-9) && b.approx_eq(P::new(0.0, 10.0), 1e-9));
+        h.get_by_label("Distance 1.2450 in · ΔX -1.1811 in · ΔY 0.3937 in · Angle 161.57°");
+    }
+
+    /// M19 K4 (the helper's own step stays: can_undo is unchanged, not false).
+    #[test]
+    fn m19_k4_no_dirty_no_undo() {
+        let (h, n) = measured();
+        let s = &h.state().state;
+        assert!(!s.dirty);
+        assert_eq!(s.undo.len(), n);
+        assert_eq!(s.project, s.undo_base);
+    }
+
+    /// M19 K5.
+    #[test]
+    fn m19_k5_escape() {
+        let (mut h, _) = measured();
+        h.hover_at(to_s(&h, P::new(40.0, 30.0)));
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().state.measure, None);
+        assert_eq!(h.state().state.tool, state::CanvasTool::Measure);
+        assert!(h.query_by_label_contains("Distance ").is_none());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Select);
+        assert!(h.query_by_label("Properties").is_none());
+    }
+
+    /// Verifier: live ruler follows the cursor, status and Properties update; leaving the canvas hides it
+    /// (A is kept); fixed result keeps the "first point" hint.
+    #[test]
+    fn m19_v_live_updates_and_leaving_canvas() {
+        let mut h = measure_harness(hc_project::Units::Mm);
+        click_side(&mut h, "Measure");
+        click_world(&mut h, P::new(20.6, 20.4));
+        h.hover_at(to_s(&h, P::new(40.0, 30.0)));
+        h.run();
+        h.get_by_label(M_LIVE);
+        h.get_by_label("Measure: click the second point");
+        h.hover_at(to_s(&h, P::new(40.0, 20.0)));
+        h.run();
+        h.get_by_label("Distance 20.000 mm · ΔX 20.000 mm · ΔY 0.000 mm · Angle 0.00°");
+        h.hover_at(egui::pos2(1200.0, 400.0)); // over the Properties pane
+        h.run();
+        assert!(h.query_by_label_contains("Distance ").is_none());
+        assert!(h.state().state.pending.is_some());
+        click_world(&mut h, P::new(40.0, 30.0));
+        click_world(&mut h, P::new(40.0, 30.0)); // 2nd click was B above; this starts a new A
+        assert!(h.state().state.pending.is_some() && h.state().state.measure.is_none());
+    }
+
+    /// Verifier: after a fixed measurement the hint line still says "first point" (documented, confusing?).
+    #[test]
+    fn m19_v_hint_after_fixed_and_undo_tile_and_fit() {
+        let (mut h, _) = measured();
+        assert!(h.query_by_label("Measure: click the first point").is_some());
+        let s = &h.state().state;
+        assert!(!s.dirty);
+        h.hover_at(egui::pos2(700.0, 400.0));
+        h.run();
+        click_side(&mut h, "Zoom to fit");
+        h.run();
+        assert_eq!(h.state().state.tool, state::CanvasTool::Measure);
+        assert!(h.state().state.measure.is_some()); // fit does not clear it
+    }
+
     #[test]
     fn m15_drag_moves_item() {
         let (mut h, id) = drag_harness();
         let n = h.state().state.undo.len();
         drag_circle(&mut h, false);
         let c = centre_of(&h, id);
-        assert!(c.approx_eq(P::new(80.0, 50.0), 1e-3), "{c:?}");
+        // M20: pressed at (60,50) the circle grabs its centre, which lands under the pointer at (90,50)
+        assert!(c.approx_eq(P::new(90.0, 50.0), 1e-3), "{c:?}");
         let s = &h.state().state;
         assert_eq!(s.selection, std::collections::BTreeSet::from([id]));
         assert_eq!(s.undo.len(), n + 1);
@@ -1531,7 +1725,7 @@ mod kittest {
         for (g, group) in groups.iter().enumerate() {
             for e in group {
                 let want = match (g, e.name) {
-                    (0, "Set origin" | "Zoom to fit") => Tint::View,
+                    (0, "Set origin" | "Measure") | (2, "Zoom to fit") => Tint::View,
                     (0, _) => Tint::Draw,
                     (1, _) => Tint::Edit,
                     (2, _) => Tint::File,

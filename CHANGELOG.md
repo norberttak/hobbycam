@@ -6,6 +6,9 @@ All notable changes to HobbyCAM are listed here. The format follows
 ## [0.3.0] - YYYY-MM-DD
 
 ### Added
+- Measure tool: shows the distance, ΔX, ΔY and angle between two snapped points (temporary, not saved).
+- Move items by their key points (centre, end, midpoint, corner, intersection) and drop them onto other items'
+  points or the grid; Snap to objects / Snap to grid in Settings.
 
 ## [0.2.0] - 2026-10-28
 

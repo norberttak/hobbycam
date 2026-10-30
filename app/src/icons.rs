@@ -1,5 +1,5 @@
 //! Phosphor icon font (fill, MIT): https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/Phosphor-Fill.ttf
-//! Codepoints from the `style.css` of the same release (fill = regular for these 23); see `assets/README.md`.
+//! Codepoints from the `style.css` of the same release (fill = regular for these 24); see `assets/README.md`.
 
 use eframe::egui::{self, FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 
@@ -26,11 +26,12 @@ pub const TOOLPATHS: &str = "\u{e39c}"; // path
 pub const SIM: &str = "\u{e3d0}"; // play
 pub const SETTINGS: &str = "\u{e270}"; // gear
 pub const TOOLS: &str = "\u{e5d4}"; // wrench
+pub const MEASURE: &str = "\u{e6b8}"; // ruler
 
 #[cfg(test)]
-pub const ALL: [&str; 23] = [
+pub const ALL: [&str; 24] = [
     NEW, OPEN, SAVE, IMPORT, EXPORT, UNDO, REDO, DELETE, ROTATE, FLIP_H, FLIP_V, SELECT, LINE,
-    RECT, CIRCLE, TEXT, FILLET, ORIGIN, FIT, TOOLPATHS, SIM, SETTINGS, TOOLS,
+    RECT, CIRCLE, TEXT, FILLET, ORIGIN, FIT, TOOLPATHS, SIM, SETTINGS, TOOLS, MEASURE,
 ];
 
 /// Adds Phosphor as the lowest-priority fallback of the proportional family (Private Use Area, no clash with text).
@@ -61,6 +62,9 @@ mod tests {
         h.ctx.fonts_mut(|f| {
             for icon in ALL {
                 let c = icon.chars().next().unwrap();
+                assert!(f.has_glyph(&id, c), "U+{:04X}", c as u32);
+            }
+            for c in ['Δ', '°'] {
                 assert!(f.has_glyph(&id, c), "U+{:04X}", c as u32);
             }
         });

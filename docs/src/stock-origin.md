@@ -19,9 +19,11 @@ Under **Origin** choose where X0 Y0 of the G-code is:
 
 To pick a point, click **Pick on drawing**, or press `O` (Set origin):
 
-1. Hover over the drawing until the snap marker and its label (for example "Corner") show.
+1. Hover over the drawing until the snap marker and its label (for example "Corner" or "Grid") show.
 2. Click. The red and green arrows move to that point and the tool goes back to Select.
 3. `Esc` cancels without changing anything.
+
+With both snapping options off (Settings → Snapping) the clicked point itself is used.
 
 ![Set origin hovering the centre of the bracket's large circle](images/set-origin.png)
 

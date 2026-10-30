@@ -6,7 +6,7 @@ use eframe::egui::{self, Rect};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 
-const NAMES: [&str; 23] = [
+const NAMES: [&str; 24] = [
     "New",
     "Open project…",
     "Save",
@@ -25,6 +25,7 @@ const NAMES: [&str; 23] = [
     "Text",
     "Round corners",
     "Set origin",
+    "Measure",
     "Zoom to fit",
     "Show toolpaths",
     "Simulation",
@@ -32,7 +33,7 @@ const NAMES: [&str; 23] = [
     "Settings…",
 ];
 
-const TOOLS: [(&str, CanvasTool); 7] = [
+const TOOLS: [(&str, CanvasTool); 8] = [
     ("Select", CanvasTool::Select),
     ("Line", CanvasTool::Line),
     ("Rectangle", CanvasTool::Rect),
@@ -40,6 +41,7 @@ const TOOLS: [(&str, CanvasTool); 7] = [
     ("Text", CanvasTool::Text),
     ("Round corners", CanvasTool::Fillet),
     ("Set origin", CanvasTool::SetOrigin),
+    ("Measure", CanvasTool::Measure),
 ];
 
 fn harness_sized(s: AppState, size: egui::Vec2, th: Option<egui::Theme>) -> Harness<'static, App> {

@@ -11,6 +11,7 @@ Pick a tool in the **Draw** menu or the sidebar. The status bar tells you what t
 - **Circle** (`C`): click the centre, then a point on the circle.
 - **Text** (`T`): click the start of the baseline.
 - **Round corners**: see below.
+- **Measure**: see below.
 
 ![Drawing a rectangle from a snapped point](images/drawing.png)
 
@@ -23,7 +24,9 @@ A drawn shape becomes a plain contour, like an imported one.
 
 ## Snaps
 
-While a drawing tool or Set origin is active, the cursor snaps to points within 10 screen pixels.
+While a drawing tool, Measure or Set origin is active, the cursor snaps to object points within 10 screen pixels;
+when none is that close it snaps to the nearest crossing of the fine grid lines. **Settings → Snapping** turns
+either off (both off: the clicked point is used as it is).
 A small marker and a label show what it found:
 
 | Label | Marker | Where |
@@ -34,15 +37,19 @@ A small marker and a label show what it found:
 | Center | circle | centre of a circle or arc |
 | Intersection | X | where two lines or curves cross |
 | Midpoint | triangle | middle of a segment |
+| Grid | plus | the nearest crossing of the fine grid (when no object point is near) |
+
+Round corners is not affected: it always uses the corner you click.
 
 On very large drawings the status bar says "Intersection snaps off: drawing too large".
 
 ## Moving and editing
 
-- Drag an item with the Select tool to move it (and everything else selected). The point you grab snaps to the
-  item's own corners/centres, the drop point to the snap points of other items (same markers as above). Hold
-  `Shift` while dragging to move only horizontally or vertically; `Esc` puts it back. A drag that starts on empty
-  space, or with `Shift` held, selects with a box as before.
+- Drag an item with the Select tool to move it (and everything else selected). You hold it by its key point
+  nearest to the mouse – a circle's centre, a line's end or middle, a corner, an intersection – shown by a marker
+  before you press. The point lands on another item's snap point or on the grid, as set in **Settings → Snapping**
+  (same markers as above). Hold `Shift` while dragging to move only horizontally or vertically; `Esc` puts it back.
+  A drag that starts on empty space, or with `Shift` held, selects with a box as before.
 - Properties shows editable fields for what it recognises, drawn **and** imported: a line (X1/Y1/X2/Y2, Length;
   the start stays put), a circle (Center X/Y, Diameter; also a DXF circle made of two half arcs), a rectangle with
   straight sides along X and Y (X, Y = bottom-left corner, Width, Height, Corner radius; the bottom-left corner stays
@@ -55,6 +62,18 @@ On very large drawings the status bar says "Intersection snaps off: drawing too 
 ## Round corners
 
 **Round corners** (sidebar or Draw menu) rounds sharp corners with an arc of the **Radius** set in Properties. Click a corner (the highlighted corner shows the arc it will get), or select contours first and click **Round all corners of selection**. It works on drawn and imported geometry. Only corners between two straight lines are rounded; corners next to an arc, corners that are already smooth and the ends of open lines are left alone. When the radius does not fit (the sides are too short), the corner is skipped and a message says how many were skipped and why (a click says the largest radius that fits). Undo reverts it; operations and tabs stay on the item. A sharp rectangle rounded at all four corners is edited as a rectangle with that Corner radius.
+
+## Measure
+
+**Measure** (sidebar or Draw menu) shows the distance between two points. Click the first point, move the mouse
+(a ruler follows the cursor) and click the second point. Both clicks snap like the drawing tools (line ends,
+corners, circle centres, …); without a snap the clicked point is used. The ruler shows the distance, the status bar
+and Properties show the distance, ΔX, ΔY (second point minus first) and the angle (degrees counter-clockwise from
+the X axis, 0–360). Values follow the units in Settings; X/Y are drawing coordinates. A new click starts a new
+measurement; `Esc` clears it (press again to leave the tool). Measurements are not saved and do not change the
+project.
+
+![Measuring between a corner and a circle centre](images/measure.png)
 
 ## Changing the selection
 

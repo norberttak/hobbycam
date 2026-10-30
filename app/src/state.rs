@@ -1,15 +1,15 @@
 //! Application state and every project edit. No egui UI code here.
 
 use crate::hit;
-use crate::snap::{self, Snap, SnapCache};
-use crate::view::View;
+use crate::snap::{self, Snap, SnapCache, SnapKind};
+use crate::view::{grid_step, View};
 use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::fillet::{self, FilletSkip};
 use hc_geom::{shapes, BBox, Contour, Point, Segment, Transform, EPS};
 use hc_post::GcodeFile;
 use hc_project::{
-    fmt_len, Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Project, Side, Stock,
-    Tool, ToolLibrary, Units, WorkOrigin,
+    fmt_len, Direction, Geom, Item, Machine, ManualTabs, OpKind, Operation, Prefs, Project, Side,
+    Stock, Tool, ToolLibrary, Units, WorkOrigin,
 };
 use hc_sim::{Sim, SimError};
 use hc_toolpath::{Issue, Toolpath, ToolpathError};
@@ -125,6 +125,7 @@ pub enum CanvasTool {
     Circle,
     Text,
     Fillet,
+    Measure,
 }
 
 impl CanvasTool {
@@ -141,6 +142,8 @@ impl CanvasTool {
             (CanvasTool::Circle, true) => "Circle: click a point on the circle",
             (CanvasTool::Text, _) => "Text: click the start of the baseline",
             (CanvasTool::Fillet, _) => "Round corners: click a sharp corner",
+            (CanvasTool::Measure, false) => "Measure: click the first point",
+            (CanvasTool::Measure, true) => "Measure: click the second point",
         })
     }
 }
@@ -186,7 +189,7 @@ pub struct FilletHover {
 pub struct MoveDrag {
     /// Moving items and their geometry when the drag started.
     pub orig: Vec<(u64, Geom)>,
-    /// Grabbed world point (snapped to the moving items when one of their snap points was near).
+    /// Grabbed world point: the moving items' key point nearest to the press (M20).
     pub grab: Point,
     /// Current translation, mm.
     pub delta: Point,
@@ -255,7 +258,10 @@ impl DrawForm {
                 font: self.font,
                 height: self.height,
             }),
-            CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Fillet => None,
+            CanvasTool::Select
+            | CanvasTool::SetOrigin
+            | CanvasTool::Fillet
+            | CanvasTool::Measure => None,
         }
     }
 }
@@ -293,6 +299,10 @@ pub struct AppState {
     pub library_path: Option<PathBuf>,
     /// Load error text; while set, the library cannot be saved.
     pub library_error: Option<String>,
+    /// App preferences of this computer (not saved in the project, no undo).
+    pub prefs: Prefs,
+    /// `prefs.json` next to the tool library; None = in memory only.
+    pub prefs_path: Option<PathBuf>,
     pub selection: BTreeSet<u64>,
     pub selected_op: Option<u64>,
     /// (item, index into that item's tab positions) of the selected op.
@@ -320,8 +330,10 @@ pub struct AppState {
     pub tool: CanvasTool,
     pub draw: DrawForm,
     pub xform: XformForm,
-    /// First click of a two-click drawing tool.
+    /// First click of a two-click tool (Line, Rect, Circle, Measure).
     pub pending: Option<Point>,
+    /// Measure tool: the fixed A → B (temporary, not saved, no undo).
+    pub measure: Option<(Point, Point)>,
     /// Element drag in progress.
     pub moving: Option<MoveDrag>,
     /// (item index, point, kind), rebuilt in `items_changed`.
@@ -350,6 +362,17 @@ impl AppState {
                 Some("no user configuration directory found".to_string()),
             ),
         };
+        let prefs_path = library_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.join("prefs.json"));
+        let (prefs, prefs_error) = match &prefs_path {
+            Some(p) => match Prefs::load(p) {
+                Ok(v) => (v, None),
+                Err(e) => (Prefs::default(), Some((p.clone(), e))),
+            },
+            None => (Prefs::default(), None),
+        };
         let mut s = AppState {
             project: Project::new(),
             path: None,
@@ -357,6 +380,8 @@ impl AppState {
             library,
             library_path,
             library_error,
+            prefs,
+            prefs_path,
             selection: BTreeSet::new(),
             selected_op: None,
             selected_tab: None,
@@ -376,6 +401,7 @@ impl AppState {
             draw: DrawForm::default(),
             xform: XformForm::default(),
             pending: None,
+            measure: None,
             moving: None,
             snap_cache: SnapCache::default(),
             undo: Vec::new(),
@@ -385,6 +411,15 @@ impl AppState {
         };
         if let Some(e) = s.library_error.clone() {
             s.msg(Severity::Error, format!("Tool library: {e}"));
+        }
+        if let Some((p, e)) = prefs_error {
+            s.msg(
+                Severity::Warning,
+                format!(
+                    "Preferences: cannot load {}: {e}; using the defaults",
+                    p.display()
+                ),
+            );
         }
         s
     }
@@ -488,6 +523,7 @@ impl AppState {
         self.items_changed();
         self.fit_pending = true;
         self.pending = None;
+        self.measure = None;
         self.moving = None;
         self.undo.clear();
         self.redo.clear();
@@ -787,7 +823,7 @@ impl AppState {
 
     /// Drag start at `p` (world): when a visible item is within `pick_tol`, applies the plain-click rules if it is not
     /// selected yet, then starts moving the selection if that item is selected. False = no move (the canvas starts a box).
-    pub fn start_move(&mut self, p: Point, pick_tol: f64, snap_r: f64) -> bool {
+    pub fn start_move(&mut self, p: Point, pick_tol: f64) -> bool {
         let Some(hit) = hit::pick_prefer(
             &self.project.items,
             |i| self.is_visible(i),
@@ -810,14 +846,7 @@ impl AppState {
             .filter(|i| self.selection.contains(&i.id))
             .map(|i| (i.id, i.geom.clone()))
             .collect();
-        let grab = snap::nearest(
-            &self.snap_cache.cands,
-            &self.project.items,
-            |i| self.selection.contains(&i.id),
-            p,
-            snap_r,
-        )
-        .map_or(p, |s| s.p);
+        let grab = self.grab_at(p, pick_tol).map_or(p, |s| s.p);
         self.moving = Some(MoveDrag {
             orig,
             grab,
@@ -828,19 +857,62 @@ impl AppState {
         true
     }
 
-    /// Moves the dragged items so the grab point lands on the cursor (or the snap target near it); `axis_lock` zeroes the
-    /// smaller component. No-op without a drag. Ids that no longer exist are skipped.
+    /// The key point a drag starting at `p` would grab (rule in specs/M20.md, decision 1); None = no move would start.
+    /// shortcut: the "no candidate" fallback reports kind Point at the pressed point; only empty contours hit it.
+    pub fn grab_at(&self, p: Point, pick_tol: f64) -> Option<Snap> {
+        let hit = hit::pick_prefer(
+            &self.project.items,
+            |i| self.is_visible(i),
+            p,
+            pick_tol,
+            |id| self.selection.contains(&id),
+        )?;
+        let sel = self.selection.contains(&hit);
+        if !sel && self.tab_markers().iter().any(|(m, _, _)| *m == hit) {
+            return None;
+        }
+        Some(
+            snap::nearest(
+                &self.snap_cache.cands,
+                &self.project.items,
+                |i| {
+                    if sel {
+                        self.selection.contains(&i.id)
+                    } else {
+                        i.id == hit
+                    }
+                },
+                p,
+                f64::INFINITY,
+            )
+            .unwrap_or(Snap {
+                p,
+                kind: SnapKind::Point,
+                item: hit,
+            }),
+        )
+    }
+
+    /// Moves the dragged items so the grab point lands on the drop target: object snap (pref, within `snap_r`) → grid
+    /// (pref) → cursor; then `axis_lock` zeroes the smaller component. No-op without a drag. Ids that no longer exist are skipped.
     pub fn drag_move(&mut self, cursor: Point, snap_r: f64, axis_lock: bool) {
         let Some(m) = self.moving.take() else {
             return;
         };
-        let snap = snap::nearest(
-            &self.snap_cache.cands,
-            &self.project.items,
-            |i| self.is_visible(i) && !m.orig.iter().any(|(id, _)| *id == i.id),
-            cursor,
-            snap_r,
-        );
+        let snap = self
+            .prefs
+            .snap_objects
+            .then(|| {
+                snap::nearest(
+                    &self.snap_cache.cands,
+                    &self.project.items,
+                    |i| self.is_visible(i) && !m.orig.iter().any(|(id, _)| *id == i.id),
+                    cursor,
+                    snap_r,
+                )
+            })
+            .flatten()
+            .or_else(|| self.grid_at(cursor));
         let mut d = snap.map_or(cursor, |s| s.p) - m.grab;
         if axis_lock {
             if d.x.abs() >= d.y.abs() {
@@ -924,6 +996,7 @@ impl AppState {
         }
         self.tool = t;
         self.pending = None;
+        self.measure = None;
     }
 
     /// Escape: cancels a move drag, else drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
@@ -932,12 +1005,80 @@ impl AppState {
             self.cancel_move();
         } else if self.pending.is_some() {
             self.pending = None;
+        } else if self.measure.is_some() {
+            self.measure = None;
         } else if self.tool != CanvasTool::Select {
             self.tool = CanvasTool::Select;
         } else {
             self.clear_selection();
             self.selected_tab = None;
             self.selected_op = None;
+        }
+    }
+
+    /// The measurement to show: the fixed one, else (pending A, cursor snapped like a click) while the cursor is on
+    /// the canvas. None outside the Measure tool.
+    pub fn measure_live(&self) -> Option<(Point, Point)> {
+        if self.tool != CanvasTool::Measure {
+            return None;
+        }
+        if self.measure.is_some() {
+            return self.measure;
+        }
+        let (a, c) = (self.pending?, self.cursor?);
+        let b = self
+            .snap_point(c, snap::SNAP_PX / self.view.zoom as f64)
+            .map_or(c, |sn| sn.p);
+        Some((a, b))
+    }
+
+    /// The visible minor grid step in mm (canvas lines and grid snapping use the same value).
+    pub fn grid_step(&self) -> f64 {
+        grid_step(self.view.zoom, self.project.units, crate::view::GRID_MIN_PX)
+    }
+
+    /// Grid node near `p` when "Snap to grid" is on.
+    fn grid_at(&self, p: Point) -> Option<Snap> {
+        self.prefs.snap_grid.then(|| Snap {
+            p: snap::grid_snap(p, self.grid_step()),
+            kind: SnapKind::Grid,
+            item: 0,
+        })
+    }
+
+    /// The shared snap rule of the drawing tools, Measure and Set origin: object (pref on, within `radius`) → grid
+    /// (pref on) → None.
+    pub fn snap_point(&self, p: Point, radius: f64) -> Option<Snap> {
+        self.prefs
+            .snap_objects
+            .then(|| self.snap_at(p, radius))
+            .flatten()
+            .or_else(|| self.grid_at(p))
+    }
+
+    /// A primary click of a non-Select, non-Round-corners tool at the raw world point `w`, snapped by `snap_point`
+    /// (radius SNAP_PX / zoom). With both snap options off the raw point counts as snapped (Set origin).
+    pub fn snapped_click(&mut self, w: Point) {
+        let snap = self.snap_point(w, snap::SNAP_PX / self.view.zoom as f64);
+        let free = !self.prefs.snap_objects && !self.prefs.snap_grid;
+        self.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some() || free);
+    }
+
+    /// Saves at once when changed; never an undo step, never dirty. A failed save keeps the value and warns.
+    pub fn set_prefs(&mut self, p: Prefs) {
+        if p == self.prefs {
+            return;
+        }
+        self.prefs = p;
+        if let Some(path) = self.prefs_path.clone() {
+            let saved = match path.parent() {
+                Some(d) => std::fs::create_dir_all(d).map_err(Into::into),
+                None => Ok(()),
+            }
+            .and_then(|()| p.save(&path));
+            if let Err(e) = saved {
+                self.msg(Severity::Warning, format!("Cannot save preferences: {e}"));
+            }
         }
     }
 
@@ -955,6 +1096,13 @@ impl AppState {
     pub fn canvas_click(&mut self, p: Point, snapped: bool) {
         match self.tool {
             CanvasTool::Select | CanvasTool::Fillet => {} // Fillet: the canvas calls fillet_click
+            CanvasTool::Measure => match self.pending.take() {
+                None => {
+                    self.pending = Some(p);
+                    self.measure = None;
+                }
+                Some(a) => self.measure = Some((a, p)),
+            },
             CanvasTool::SetOrigin => {
                 if snapped {
                     self.set_origin(WorkOrigin::Point(p));
@@ -1370,6 +1518,7 @@ impl AppState {
             .selected_op
             .filter(|id| ops.iter().any(|o| o.id == *id));
         self.pending = None;
+        self.measure = None;
         self.moving = None;
         self.dirty = self.project != self.saved;
     }
@@ -1789,6 +1938,43 @@ fn visible_char(c: char) -> String {
     } else {
         format!("U+{:04X}", c as u32)
     }
+}
+
+/// Direction a → b in degrees CCW from +X, in [0, 360); None when |b − a| < 1e-9 mm.
+pub fn measure_angle(a: Point, b: Point) -> Option<f64> {
+    let d = b - a;
+    (d.length() >= 1e-9).then(|| {
+        let a = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
+        // rem_euclid of a tiny negative angle rounds to 360.0
+        if a >= 360.0 {
+            0.0
+        } else {
+            a
+        }
+    })
+}
+
+/// "53.13°", "0.00°" for anything that rounds to 360.00, "–" for None.
+pub fn fmt_angle(a: Option<f64>) -> String {
+    match a {
+        None => "–".to_string(),
+        Some(d) => match format!("{d:.2}°") {
+            s if s == "360.00°" => "0.00°".to_string(),
+            s => s,
+        },
+    }
+}
+
+/// Status bar text, e.g. "Distance 50.000 mm · ΔX 30.000 mm · ΔY 40.000 mm · Angle 53.13°".
+pub fn measure_summary(a: Point, b: Point, u: Units) -> String {
+    let d = b - a;
+    format!(
+        "Distance {} · ΔX {} · ΔY {} · Angle {}",
+        fmt_len(d.length(), u),
+        fmt_len(d.x, u),
+        fmt_len(d.y, u),
+        fmt_angle(measure_angle(a, b))
+    )
 }
 
 pub fn warning_text(w: &ImportWarning) -> String {
@@ -3915,7 +4101,7 @@ mod m15_tests {
         let id = ids[0];
         s.saved = s.project.clone();
         s.dirty = false;
-        assert!(s.start_move(on(&s, id), 0.5, 0.0));
+        assert!(s.start_move(on(&s, id), 0.5));
         s.drag_move(p(80.0, 50.0), 0.0, false);
         s.delete_selection();
         assert!(s.moving.is_none() && s.item(id).is_none());
@@ -3930,7 +4116,7 @@ mod m15_tests {
                 r: 10.0,
             })
             .unwrap()[0];
-        assert!(s.start_move(on(&s, id), 0.5, 0.0));
+        assert!(s.start_move(on(&s, id), 0.5));
         s.drag_move(p(80.0, 50.0), 0.0, false);
         s.saved = s.project.clone(); // as Cmd+S during the drag
         s.cancel_move();
@@ -3990,6 +4176,7 @@ mod m15_tests {
 
     fn circle_state() -> (AppState, u64, u64) {
         let mut s = AppState::new(None);
+        s.prefs.snap_grid = false; // M20: no grid in M15 move tests
         let c = s
             .add_shape(Shape::Circle {
                 c: p(50.0, 50.0),
@@ -4013,13 +4200,13 @@ mod m15_tests {
         let (mut s, c, r) = circle_state();
         let rect0 = contour(&s, r);
         let n = s.undo.len();
-        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        assert!(s.start_move(p(60.0, 50.0), 0.5));
         assert_eq!(s.selection, BTreeSet::from([c]));
         s.drag_move(p(70.0, 50.0), 0.0, false);
         s.commit_undo(false);
         s.drag_move(p(80.0, 55.0), 0.0, false);
-        assert!(near(centre(&s, c), p(70.0, 55.0)));
-        assert_eq!(s.moving.as_ref().unwrap().delta, p(20.0, 5.0));
+        assert!(near(centre(&s, c), p(80.0, 55.0)));
+        assert_eq!(s.moving.as_ref().unwrap().delta, p(30.0, 5.0));
         s.end_move();
         s.commit_undo(true);
         assert_eq!(s.undo.len(), n + 1);
@@ -4033,6 +4220,7 @@ mod m15_tests {
     #[test]
     fn m15_move_snaps_grab_and_target() {
         let mut s = AppState::new(None);
+        s.prefs.snap_grid = false; // M20: no grid in M15 move tests
         let a = s
             .add_shape(Shape::Rect {
                 min: p(0.0, 0.0),
@@ -4050,7 +4238,7 @@ mod m15_tests {
         .unwrap();
         let b = s.project.items[1].id;
         s.click_select(on(&s, a), 0.5, false);
-        assert!(s.start_move(p(0.2, 0.1), 0.5, 1.0));
+        assert!(s.start_move(p(0.2, 0.1), 0.5));
         assert_eq!(s.moving.as_ref().unwrap().grab, p(0.0, 0.0));
         s.drag_move(p(70.3, 0.2), 1.0, false);
         assert!(near(s.item_bbox[0].min, p(70.0, 0.0)));
@@ -4065,9 +4253,9 @@ mod m15_tests {
     #[test]
     fn m15_move_axis_lock() {
         let (mut s, _, _) = circle_state();
-        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        assert!(s.start_move(p(60.0, 50.0), 0.5));
         s.drag_move(p(90.0, 54.0), 0.0, true);
-        assert!(near(s.moving.as_ref().unwrap().delta, p(30.0, 0.0)));
+        assert!(near(s.moving.as_ref().unwrap().delta, p(40.0, 0.0)));
         s.drag_move(p(62.0, 80.0), 0.0, true);
         assert!(near(s.moving.as_ref().unwrap().delta, p(0.0, 30.0)));
     }
@@ -4075,6 +4263,7 @@ mod m15_tests {
     #[test]
     fn m15_escape_cancels_move() {
         let (mut s, _) = bracket_clean();
+        s.prefs.snap_grid = false; // M20: no grid in M15 move tests
         s.saved = s.project.clone();
         s.dirty = false;
         s.commit_undo(true);
@@ -4082,7 +4271,7 @@ mod m15_tests {
         let hole = circles(&s, 15.875)[0];
         hide_dup_layers(&mut s);
         let c0 = centre(&s, hole);
-        assert!(s.start_move(on(&s, hole), 0.5, 0.0));
+        assert!(s.start_move(on(&s, hole), 0.5));
         s.drag_move(on(&s, hole) + p(5.0, 0.0), 0.0, false);
         assert!(!near(centre(&s, hole), c0));
         s.escape();
@@ -4099,7 +4288,7 @@ mod m15_tests {
     fn m15_drag_start_on_empty_is_no_move() {
         let (mut s, _) = bracket_clean();
         let sel = s.selection.clone();
-        assert!(!s.start_move(p(-1000.0, -1000.0), 0.5, 0.0));
+        assert!(!s.start_move(p(-1000.0, -1000.0), 0.5));
         assert!(s.moving.is_none());
         assert_eq!(s.selection, sel);
     }
@@ -4107,11 +4296,12 @@ mod m15_tests {
     #[test]
     fn m15_ops_and_tabs_follow_move() {
         let (mut s, outside) = bracket_clean();
+        s.prefs.snap_grid = false; // M20: no grid in M15 move tests
         let hole = circles(&s, 15.875)[0];
         hide_dup_layers(&mut s);
         let c0 = centre(&s, hole);
-        assert!(s.start_move(on(&s, hole), 0.5, 0.0));
-        s.drag_move(on(&s, hole) + p(5.0, -3.0), 0.0, false);
+        assert!(s.start_move(on(&s, hole), 0.5));
+        s.drag_move(c0 + p(5.0, -3.0), 0.0, false);
         s.end_move();
         s.refresh_toolpaths();
         let drill = &s.project.operations[2];
@@ -4139,7 +4329,7 @@ mod m15_tests {
         let x0 = s.item_bbox[s.project.items.iter().position(|i| i.id == outer).unwrap()]
             .min
             .x;
-        assert!(s.start_move(on(&s, outer), 0.5, 0.0));
+        assert!(s.start_move(on(&s, outer), 0.5));
         s.drag_move(on(&s, outer) + p(10.0, 0.0), 0.0, false);
         s.end_move();
         assert_eq!(s.selected_op, Some(outside));
@@ -4162,7 +4352,7 @@ mod m15_tests {
     #[test]
     fn m15_undo_during_drag_ends_move() {
         let (mut s, c, _) = circle_state();
-        assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+        assert!(s.start_move(p(60.0, 50.0), 0.5));
         s.drag_move(p(70.0, 50.0), 0.0, false);
         s.undo();
         assert!(s.moving.is_none());

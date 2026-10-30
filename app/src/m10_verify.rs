@@ -717,6 +717,7 @@ mod ui {
 
     fn corner_state() -> AppState {
         let mut s = AppState::new(None);
+        s.prefs.snap_grid = false; // M20: raw points
         rect(&mut s, 0.0, 0.0, 40.0, 30.0, 0.0);
         s.clear_selection();
         s.commit_undo(true);

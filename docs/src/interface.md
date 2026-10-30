@@ -6,10 +6,10 @@ From top to bottom and left to right:
 
 - **Menu bar**: File, Edit, View, Draw, Help.
 - **Messages** under the menu: import notes, export results and errors. **Dismiss** removes one.
-- **Icon sidebar** (two columns) on the far left, buttons coloured by group (drawing blue, origin and zoom green,
-  edit purple, file slate, toolpaths and simulation orange, tools and settings grey). It has the same commands as the
-  menus. Hover a button to see its name and shortcut. The active tool and the toggles that are on have a dark ring and
-  a small arrow. Grey buttons cannot be used right now (for example Delete with nothing selected).
+- **Icon sidebar** (two columns) on the far left, buttons coloured by group (drawing blue, origin, measure and zoom
+  green, edit purple, file slate, toolpaths and simulation orange, tools and settings grey). It has the same commands as
+  the menus. Hover a button to see its name and shortcut. The active tool and the toggles that are on have a dark ring
+  and a small arrow. Grey buttons cannot be used right now (for example Delete with nothing selected).
 - **Layers and Operations** next to the sidebar:
   - the layers of the drawing, each with a checkbox to show or hide it and its item count;
   - the operations in the order they will run, each with an enable checkbox, **Up**, **Down** and **Delete**,
@@ -23,10 +23,12 @@ From top to bottom and left to right:
 - **Issues** panel at the bottom, only when a [sanity check](sanity.md) found something. Click an issue to select its
   operation and item.
 - **Status bar**: cursor position (plus "Work X … Y …" when the origin is not the drawing origin), zoom in percent,
-  "*n* selected", and the hint of the active tool, for example "Line: click the start point · Esc cancels".
-- **Settings** window (**File → Settings…**, `Cmd/Ctrl+,` or the gear in the sidebar): Units, Machine and Stock. Changes
-  apply at once and can be undone; close it with the X or `Esc`. In this manual **Settings → Stock** means the Stock
-  section of this window.
+  "*n* selected", and the hint of the active tool, for example "Line: click the start point · Esc cancels", and with
+  Measure the distance, ΔX, ΔY and angle.
+- **Settings** window (**File → Settings…**, `Cmd/Ctrl+,` or the gear in the sidebar): Units, Machine, Stock and
+  Snapping. Changes apply at once; Units, Machine and Stock are part of the project and can be undone, Snapping is a
+  setting of this computer (kept for every project, not undone). Close it with the X or `Esc`. In this manual
+  **Settings → Stock** means the Stock section of this window.
 
 ## Mouse
 
@@ -38,7 +40,7 @@ From top to bottom and left to right:
 | Middle-button drag, or hold Space and drag | pan |
 | Click | select one item (click empty space to clear) |
 | Shift + click | add an item to the selection, or remove it again |
-| Drag an item | move the selection (Shift while dragging: straight; Esc cancels) |
+| Drag an item | move the selection by its nearest key point (Shift while dragging: straight; Esc cancels) |
 | Drag a box left to right (from empty space) | select everything fully inside the box |
 | Drag a box right to left (from empty space) | select everything the box touches |
 | `F` | zoom to fit the drawing and the stock |

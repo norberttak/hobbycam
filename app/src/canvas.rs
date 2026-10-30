@@ -4,7 +4,6 @@ use crate::hit::{segment_points, tessellate_arc};
 use crate::snap::SNAP_PX;
 use crate::state::{AppState, CanvasTool};
 use crate::theme::CanvasPalette;
-use crate::view::grid_step;
 use crate::{aci, App};
 use eframe::egui::{
     self, Color32, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui,
@@ -47,6 +46,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
     s.cursor = hover.map(|p| s.view.screen_to_world(rect, p));
     let space = ui.input(|i| i.key_down(egui::Key::Space));
     let shift = ui.input(|i| i.modifiers.shift);
+    app.grab_hover = None;
 
     // pan
     if resp.dragged_by(PointerButton::Middle) || (space && resp.dragged_by(PointerButton::Primary))
@@ -123,8 +123,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
                 if s.tool == CanvasTool::Fillet {
                     s.fillet_click(w, SNAP_PX / zoom);
                 } else {
-                    let snap = s.snap_at(w, SNAP_PX / zoom);
-                    s.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some());
+                    s.snapped_click(w);
                 }
             }
         }
@@ -162,7 +161,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
         if tab.is_some() {
             s.selected_tab = tab;
             app.tab_drag = true;
-        } else if !shift && w.is_some_and(|w| s.start_move(w, pick, SNAP_PX / zoom)) {
+        } else if !shift && w.is_some_and(|w| s.start_move(w, pick)) {
             app.box_start = None;
         } else {
             app.box_start = origin;
@@ -201,6 +200,12 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
             s.end_move();
         }
     }
+    let down = ui.input(|i| i.pointer.any_down());
+    if s.moving.is_none() && app.box_start.is_none() && !app.tab_drag && !shift && !space && !down {
+        if let Some(c) = s.cursor.filter(|&c| s.tab_at(c, pick).is_none()) {
+            app.grab_hover = s.grab_at(c, pick);
+        }
+    }
 }
 
 fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
@@ -211,7 +216,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     let vis = v.visible_world(rect);
 
     // grid
-    let step = grid_step(v.zoom, s.project.units, 15.0);
+    let step = s.grid_step();
     let light = Stroke::new(1.0, pal.grid_minor);
     let strong = Stroke::new(1.0, pal.grid_major);
     let i0 = (vis.min.x / step).floor() as i64;
@@ -357,6 +362,11 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
             pal.snap,
         );
     }
+    if let Some(g) = app.grab_hover {
+        let c = v.world_to_screen(rect, g.p);
+        crate::snap::marker(painter, c, g.kind, pal.snap);
+        snap_label(painter, ui, c, g.kind.label(), pal.snap);
+    }
     // tool marker on top
     if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
         let st = &sim.steps[i];
@@ -369,7 +379,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     }
 
     if s.tool != CanvasTool::Select {
-        tool_overlay(s, ui, painter, rect, pal.snap);
+        tool_overlay(s, ui, painter, rect, pal.snap, pal.measure);
     }
 
     // selection box
@@ -407,8 +417,69 @@ fn snap_label(painter: &Painter, ui: &Ui, c: Pos2, text: &str, col: Color32) {
     );
 }
 
-fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: Color32) {
+const RULER_TICK_PX: f32 = 6.0;
+const RULER_GAP_PX: f32 = 8.0;
+
+/// Centre of a label box of `size` beside the screen segment a–b: on the upper side (screen y up; the left side for
+/// a vertical line), its nearest edge RULER_GAP_PX from the line. Same result for a–b and b–a.
+fn ruler_label_center(a: Pos2, b: Pos2, size: Vec2) -> Pos2 {
+    let d = b - a;
+    let u = d / d.length();
+    let mut n = Vec2::new(-u.y, u.x);
+    if n.y > 0.0 || (n.y == 0.0 && n.x > 0.0) {
+        n = -n;
+    }
+    let ext = RULER_GAP_PX + n.x.abs() * size.x / 2.0 + n.y.abs() * size.y / 2.0;
+    a + d / 2.0 + n * ext
+}
+
+/// Dimension line a–b with perpendicular end ticks and the `text` label on a filled box (screen px, any zoom).
+/// Shorter than 1 px: only a small circle at a, no label.
+fn ruler(painter: &Painter, ui: &Ui, a: Pos2, b: Pos2, text: &str, col: Color32) {
+    let st = Stroke::new(1.5, col);
+    let len = (b - a).length();
+    if len < 1.0 {
+        painter.circle_stroke(a, 3.0, st);
+        return;
+    }
+    let u = (b - a) / len;
+    let n = Vec2::new(-u.y, u.x);
+    painter.line_segment([a, b], st);
+    for p in [a, b] {
+        painter.line_segment([p - n * RULER_TICK_PX, p + n * RULER_TICK_PX], st);
+    }
+    let g = painter.layout_no_wrap(
+        text.to_string(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        col,
+    );
+    let size = g.size() + Vec2::new(8.0, 4.0);
+    let r = Rect::from_center_size(ruler_label_center(a, b, size), size);
+    painter.rect_filled(r, 3.0, ui.visuals().extreme_bg_color);
+    painter.rect_stroke(r, 3.0, Stroke::new(1.0, col), egui::StrokeKind::Inside);
+    painter.galley(r.center() - g.size() / 2.0, g, col);
+}
+
+fn tool_overlay(
+    s: &AppState,
+    ui: &Ui,
+    painter: &Painter,
+    rect: Rect,
+    snap_col: Color32,
+    measure_col: Color32,
+) {
     let v = &s.view;
+    if let Some((a, b)) = s.measure_live() {
+        let txt = hc_project::fmt_len(a.distance(b), s.project.units);
+        ruler(
+            painter,
+            ui,
+            v.world_to_screen(rect, a),
+            v.world_to_screen(rect, b),
+            &txt,
+            measure_col,
+        );
+    }
     let Some(cursor) = s.cursor else { return };
     if s.tool == CanvasTool::Fillet {
         if let Some(h) = s.fillet_hover(cursor, SNAP_PX / v.zoom as f64) {
@@ -449,7 +520,7 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: 
         }
         return;
     }
-    let snap = s.snap_at(cursor, SNAP_PX / v.zoom as f64);
+    let snap = s.snap_point(cursor, SNAP_PX / v.zoom as f64);
     let at = snap.map_or(cursor, |sn| sn.p);
     let stroke = Stroke::new(1.0, snap_col);
     if let Some(sn) = snap {
@@ -480,9 +551,11 @@ fn tool_overlay(s: &AppState, ui: &Ui, painter: &Painter, rect: Rect, snap_col: 
                 ARC_TOL_PX / v.zoom as f64,
             )
         }
-        CanvasTool::Select | CanvasTool::SetOrigin | CanvasTool::Text | CanvasTool::Fillet => {
-            return
-        }
+        CanvasTool::Select
+        | CanvasTool::SetOrigin
+        | CanvasTool::Text
+        | CanvasTool::Fillet
+        | CanvasTool::Measure => return,
     };
     let pts: Vec<Pos2> = world
         .into_iter()
@@ -681,5 +754,23 @@ mod tests {
         assert_eq!(depth_color(-20.0, 10.0), Color32::from_rgb(170, 40, 40));
         assert_eq!(depth_color(-5.0, 10.0), Color32::from_rgb(213, 125, 60));
         assert_eq!(depth_color(-1.0, 0.0), Color32::from_rgb(170, 40, 40));
+    }
+
+    /// M19 R1: label placement beside the ruler.
+    #[test]
+    fn r1_ruler_label_center() {
+        let sz = Vec2::new(40.0, 16.0);
+        let c = |a: (f32, f32), b: (f32, f32), e: (f32, f32)| {
+            let p = ruler_label_center(Pos2::new(a.0, a.1), Pos2::new(b.0, b.1), sz);
+            assert!(
+                (p.x - e.0).abs() < 1e-3 && (p.y - e.1).abs() < 1e-3,
+                "{p:?} vs {e:?}"
+            );
+        };
+        c((0., 0.), (100., 0.), (50., -16.));
+        c((100., 0.), (0., 0.), (50., -16.));
+        c((0., 0.), (0., 100.), (-28., 50.));
+        c((0., 100.), (0., 0.), (-28., 50.));
+        c((0., 0.), (100., 100.), (69.657, 30.343));
     }
 }

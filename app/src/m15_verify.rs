@@ -44,6 +44,7 @@ fn hide_dup_layers(s: &mut AppState) {
 
 fn two_shapes() -> (AppState, u64, u64) {
     let mut s = AppState::new(None);
+    s.prefs.snap_grid = false; // M20: no grid in M15 move tests
     let c = s
         .add_shape(Shape::Circle {
             c: p(50.0, 50.0),
@@ -78,8 +79,8 @@ fn esc_restores_geometry_and_dirty_exactly_multiselection_with_point() {
         s.commit_undo(true);
         let before = s.project.clone();
         let n = s.undo.len();
-        assert!(s.start_move(on(&s, c), 0.5, 0.0));
-        s.drag_move(on(&s, c) + p(13.37, -4.2), 0.0, false);
+        assert!(s.start_move(on(&s, c), 0.5));
+        s.drag_move(p(50.0 + 13.37, 50.0 - 4.2), 0.0, false);
         // everything moved by the same delta, point included
         assert!(near(on(&s, pt), p(7.3 + 13.37, 8.1 - 4.2)));
         assert!(s.dirty);
@@ -102,10 +103,10 @@ fn drag_away_and_back_is_clean() {
     s.commit_undo(true);
     let n = s.undo.len();
     let before = s.project.clone();
-    assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+    assert!(s.start_move(p(60.0, 50.0), 0.5));
     s.drag_move(p(90.0, 70.0), 0.0, false);
     assert!(s.dirty);
-    s.drag_move(p(60.0, 50.0), 0.0, false);
+    s.drag_move(p(50.0, 50.0), 0.0, false);
     s.end_move();
     s.commit_undo(true);
     assert_eq!(s.project, before);
@@ -118,7 +119,7 @@ fn drag_away_and_back_is_clean() {
 fn drag_undo_redo_roundtrip() {
     let (mut s, c, _) = two_shapes();
     let n = s.undo.len();
-    assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+    assert!(s.start_move(p(60.0, 50.0), 0.5));
     for k in 1..=10 {
         s.drag_move(p(60.0 + k as f64, 50.0), 0.0, false);
         s.commit_undo(false);
@@ -134,23 +135,23 @@ fn drag_undo_redo_roundtrip() {
     assert!(s.redo());
     assert!(near(
         contour(&s, c).as_circle().unwrap().center,
-        p(60.0, 50.0)
+        p(70.0, 50.0)
     ));
 }
 
 #[test]
 fn axis_lock_tie_keeps_x_and_shift_released_unlocks() {
     let (mut s, c, _) = two_shapes();
-    assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
-    s.drag_move(p(70.0, 60.0), 0.0, true);
+    assert!(s.start_move(p(60.0, 50.0), 0.5));
+    s.drag_move(p(60.0, 60.0), 0.0, true);
     assert_eq!(s.moving.as_ref().unwrap().delta, p(10.0, 0.0));
-    s.drag_move(p(70.0, 60.0), 0.0, false);
+    s.drag_move(p(60.0, 60.0), 0.0, false);
     assert_eq!(s.moving.as_ref().unwrap().delta, p(10.0, 10.0));
     assert!(near(
         contour(&s, c).as_circle().unwrap().center,
         p(60.0, 60.0)
     ));
-    s.drag_move(p(60.0, 50.0), 0.0, true); // zero delta: locks to 0,0 without NaN
+    s.drag_move(p(50.0, 50.0), 0.0, true); // zero delta: locks to 0,0 without NaN
     assert_eq!(s.moving.as_ref().unwrap().delta, p(0.0, 0.0));
 }
 
@@ -163,12 +164,12 @@ fn start_move_on_hidden_layer_or_after_delete_is_safe() {
     let layer = s.item(hole).unwrap().layer.clone();
     s.set_layer_visible(&layer, false);
     // hidden layer: nothing to pick there (the duplicate may live elsewhere, so only assert no panic and no stale drag)
-    let _ = s.start_move(pt, 0.5, 0.0);
+    let _ = s.start_move(pt, 0.5);
     s.cancel_move();
     // an item deleted mid-drag is skipped
     s.set_layer_visible(&layer, true);
     hide_dup_layers(&mut s);
-    assert!(s.start_move(pt, 0.5, 0.0));
+    assert!(s.start_move(pt, 0.5));
     s.project.items.retain(|i| i.id != hole);
     s.items_changed();
     s.drag_move(pt + p(1.0, 1.0), 0.0, false);
@@ -179,16 +180,16 @@ fn start_move_on_hidden_layer_or_after_delete_is_safe() {
 #[test]
 fn set_tool_and_new_project_end_the_drag() {
     let (mut s, c, _) = two_shapes();
-    assert!(s.start_move(p(60.0, 50.0), 0.5, 0.0));
+    assert!(s.start_move(p(60.0, 50.0), 0.5));
     s.drag_move(p(70.0, 50.0), 0.0, false);
     s.set_tool(crate::state::CanvasTool::Line);
     assert!(s.moving.is_none());
     assert!(near(
         contour(&s, c).as_circle().unwrap().center,
-        p(60.0, 50.0)
+        p(70.0, 50.0)
     ));
     s.set_tool(crate::state::CanvasTool::Select);
-    assert!(s.start_move(p(70.0, 50.0), 0.5, 0.0));
+    assert!(s.start_move(p(80.0, 50.0), 0.5));
     s.new_project();
     assert!(s.moving.is_none());
     s.drag_move(p(0.0, 0.0), 0.0, false); // no-op
@@ -206,7 +207,7 @@ fn drag_toolpaths_regenerate_and_ops_reference_items() {
         .iter()
         .map(|o| o.items.clone())
         .collect();
-    assert!(s.start_move(on(&s, hole), 0.5, 0.0));
+    assert!(s.start_move(on(&s, hole), 0.5));
     s.drag_move(on(&s, hole) + p(2.0, 0.0), 0.0, false);
     s.end_move();
     s.refresh_toolpaths();
@@ -1110,7 +1111,16 @@ mod ui {
         let c0 = contour(&h.state().state, o);
         // press on the contour at a spot away from every tab marker
         let start = c0.point_at(c0.length() * 0.35);
+        h.state_mut().state.prefs.snap_objects = false;
+        h.state_mut().state.prefs.snap_grid = false;
         let a = to_s(&h, start);
+        let zoom = h.state().state.view.zoom as f64;
+        let g = h.state().state.grab_at(start, 6.0 / zoom).unwrap().p;
+        let drop = h
+            .state()
+            .state
+            .view
+            .screen_to_world(h.state().canvas_rect, a + egui::vec2(20.0, 0.0));
         drag!(
             h,
             a,
@@ -1122,10 +1132,9 @@ mod ui {
         assert_eq!(s.selected_op, Some(op), "op stays current");
         assert_eq!(manual(&h, op), vec![0.1, 0.6]);
         let c1 = contour(s, o);
-        let dx = 20.0 / s.view.zoom as f64;
         assert!(
-            c1.bbox().min.approx_eq(c0.bbox().min + p(dx, 0.0), 1e-3),
-            "moved by 20 px / zoom: {:?} -> {:?}, sel {:?}",
+            c1.bbox().min.approx_eq(c0.bbox().min + (drop - g), 1e-3),
+            "moved by drop - grab: {:?} -> {:?}, sel {:?}",
             c0.bbox().min,
             c1.bbox().min,
             s.selection
