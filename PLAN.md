@@ -247,6 +247,17 @@ Spec: `specs/M20.md`. Branch `feature/move-snap` (on top of `feature/measure-too
 - Docs: `drawing.md`, `interface.md`, `stock-origin.md`, `install.md`, `shortcuts.md`, `CHANGELOG.md`; screenshots
   regenerated (`settings.png`).
 
+### M21 – Collapsible Layers / Operations pane
+Spec: `specs/M21.md`, mock-up `specs/M21-mockup.html` (option B chosen). Branch `feature/collapsible-panels`.
+- A 22 px strip between the sidebar and the canvas with two vertical tabs, **Layers** and **Operations**; each shows
+  or hides its own list (both open = as today, one open = only that list, both closed = only the strip, the canvas
+  gets the width). The pane stays drag-resizable.
+- Remembered per computer in `prefs.json` (`layers_open`, `ops_open`, default on, format version stays 1); never
+  dirty, no undo. No menu item, no shortcut.
+- Properties still shows a selected operation while Operations is hidden; clicking an issue does not open it; a red
+  (error) or orange (warning) dot on the Operations tab when an operation has issues.
+- Docs: `interface.md` (+ new `panes-closed.png`), `install.md`, `CHANGELOG.md`; all screenshots regenerated.
+
 ## Agent workflow
 
 Three subagents live in `.claude/agents/`. The main session is the orchestrator and the only one that talks to you.
