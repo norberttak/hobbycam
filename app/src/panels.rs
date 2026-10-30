@@ -231,9 +231,27 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Stock");
             stock_section(app, ui);
+            ui.separator();
+            ui.heading("Snapping");
+            snapping_section(app, ui);
         });
     // Pick on drawing may have closed it during show
     app.settings_open &= open;
+}
+
+fn snapping_section(app: &mut App, ui: &mut Ui) {
+    let mut p = app.state.prefs;
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut p.snap_objects, "Snap to objects")
+            .on_hover_text(
+                "Line ends, corners, centres, midpoints and intersections within 10 pixels",
+            );
+        ui.checkbox(&mut p.snap_grid, "Snap to grid").on_hover_text(
+            "The nearest crossing of the fine grid lines when no object point is near",
+        );
+    });
+    ui.weak("Saved on this computer, for all projects.");
+    app.state.set_prefs(p);
 }
 
 fn units_section(app: &mut App, ui: &mut Ui) {

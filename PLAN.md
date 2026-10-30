@@ -236,6 +236,17 @@ Spec: `specs/M19.md`. Branch `feature/measure-tool`.
   dirty flag, no format change. No keyboard shortcut (sidebar + Draw menu, like Round corners).
 - Docs: `drawing.md` (+ screenshot), `shortcuts.md` (sidebar row), `interface.md`, `CHANGELOG.md`.
 
+### M20 – Move by key points, snap to objects and grid
+Spec: `specs/M20.md`. Branch `feature/move-snap` (on top of `feature/measure-tool`).
+- A drag holds the moving items' key point nearest to the pointer (centre, line end/midpoint, corner, intersection,
+  DXF point); a marker shows it while hovering with the Select tool.
+- Drop / click target: object snap within 10 px → nearest minor-grid node (drawing coordinates) → raw point; one rule
+  for moving, drawing tools, Measure and Set origin (Round corners stays raw). Shift axis lock still applies.
+- Settings window, new "Snapping" section: **Snap to objects**, **Snap to grid** — an app preference in `prefs.json`
+  next to `tools.json` (missing/broken → both on, warning), not in the project, no undo, no dirty flag.
+- Docs: `drawing.md`, `interface.md`, `stock-origin.md`, `install.md`, `shortcuts.md`, `CHANGELOG.md`; screenshots
+  regenerated (`settings.png`).
+
 ## Agent workflow
 
 Three subagents live in `.claude/agents/`. The main session is the orchestrator and the only one that talks to you.

@@ -39,7 +39,7 @@ These keys work with the mouse over the canvas and no text field active:
 | Pan | trackpad two-finger scroll, middle-button drag, or `Space` + drag |
 | Select | click |
 | Add to / remove from selection | `Shift` + click (keeps the selected operation) |
-| Move the selection | drag an item (`Shift` while dragging: straight) |
+| Move the selection | drag an item (holds its nearest key point; `Shift` while dragging: straight) |
 | Select inside a box | drag left to right (from empty space) |
 | Select touching a box | drag right to left (from empty space) |
 | Add a tab | double-click on the contour |

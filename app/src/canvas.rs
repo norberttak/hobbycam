@@ -4,7 +4,6 @@ use crate::hit::{segment_points, tessellate_arc};
 use crate::snap::SNAP_PX;
 use crate::state::{AppState, CanvasTool};
 use crate::theme::CanvasPalette;
-use crate::view::grid_step;
 use crate::{aci, App};
 use eframe::egui::{
     self, Color32, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui,
@@ -47,6 +46,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
     s.cursor = hover.map(|p| s.view.screen_to_world(rect, p));
     let space = ui.input(|i| i.key_down(egui::Key::Space));
     let shift = ui.input(|i| i.modifiers.shift);
+    app.grab_hover = None;
 
     // pan
     if resp.dragged_by(PointerButton::Middle) || (space && resp.dragged_by(PointerButton::Primary))
@@ -123,8 +123,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
                 if s.tool == CanvasTool::Fillet {
                     s.fillet_click(w, SNAP_PX / zoom);
                 } else {
-                    let snap = s.snap_at(w, SNAP_PX / zoom);
-                    s.canvas_click(snap.map_or(w, |sn| sn.p), snap.is_some());
+                    s.snapped_click(w);
                 }
             }
         }
@@ -162,7 +161,7 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
         if tab.is_some() {
             s.selected_tab = tab;
             app.tab_drag = true;
-        } else if !shift && w.is_some_and(|w| s.start_move(w, pick, SNAP_PX / zoom)) {
+        } else if !shift && w.is_some_and(|w| s.start_move(w, pick)) {
             app.box_start = None;
         } else {
             app.box_start = origin;
@@ -201,6 +200,12 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
             s.end_move();
         }
     }
+    let down = ui.input(|i| i.pointer.any_down());
+    if s.moving.is_none() && app.box_start.is_none() && !app.tab_drag && !shift && !space && !down {
+        if let Some(c) = s.cursor.filter(|&c| s.tab_at(c, pick).is_none()) {
+            app.grab_hover = s.grab_at(c, pick);
+        }
+    }
 }
 
 fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
@@ -211,7 +216,7 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
     let vis = v.visible_world(rect);
 
     // grid
-    let step = grid_step(v.zoom, s.project.units, 15.0);
+    let step = s.grid_step();
     let light = Stroke::new(1.0, pal.grid_minor);
     let strong = Stroke::new(1.0, pal.grid_major);
     let i0 = (vis.min.x / step).floor() as i64;
@@ -356,6 +361,11 @@ fn paint(app: &App, ui: &Ui, painter: &Painter, rect: Rect) {
             sn.kind.label(),
             pal.snap,
         );
+    }
+    if let Some(g) = app.grab_hover {
+        let c = v.world_to_screen(rect, g.p);
+        crate::snap::marker(painter, c, g.kind, pal.snap);
+        snap_label(painter, ui, c, g.kind.label(), pal.snap);
     }
     // tool marker on top
     if let Some((sim, i)) = sim.and_then(|sim| Some((sim, sim.step_at(s.sim_view.t)?))) {
@@ -510,7 +520,7 @@ fn tool_overlay(
         }
         return;
     }
-    let snap = s.snap_at(cursor, SNAP_PX / v.zoom as f64);
+    let snap = s.snap_point(cursor, SNAP_PX / v.zoom as f64);
     let at = snap.map_or(cursor, |sn| sn.p);
     let stroke = Stroke::new(1.0, snap_col);
     if let Some(sn) = snap {

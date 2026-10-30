@@ -87,6 +87,9 @@ impl View {
     }
 }
 
+/// Minimum minor grid spacing on screen (canvas grid and grid snapping).
+pub const GRID_MIN_PX: f32 = 15.0;
+
 /// Smallest grid step (mm) of {1,2,5}·10^k display units that is at least `min_px` on screen.
 pub fn grid_step(zoom: f32, units: Units, min_px: f32) -> f64 {
     let unit_mm = hc_project::from_display(1.0, units);

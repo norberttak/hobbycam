@@ -1,5 +1,5 @@
 //! Snap engine for the canvas tools: segment ends, contour corners, arc/circle centres, drill points, segment
-//! midpoints and intersections between segments.
+//! midpoints and intersections between segments; plus the grid (`grid_snap`, never in the cache).
 
 use eframe::egui::{self, Color32, Painter, Pos2, Stroke, Vec2};
 use hc_geom::{Point, Segment, DEFAULT_CHAIN_TOL, EPS};
@@ -22,6 +22,7 @@ pub enum SnapKind {
     Center,
     Intersection,
     Midpoint,
+    Grid,
 }
 
 impl SnapKind {
@@ -33,6 +34,7 @@ impl SnapKind {
             SnapKind::Center => "Center",
             SnapKind::Intersection => "Intersection",
             SnapKind::Midpoint => "Midpoint",
+            SnapKind::Grid => "Grid",
         }
     }
 }
@@ -94,6 +96,11 @@ pub fn candidates(item: &Item) -> Vec<(Point, SnapKind)> {
         push(c.end(), SnapKind::End);
     }
     out
+}
+
+/// Nearest node of a square grid of `step` mm through the drawing origin (round half away from zero).
+pub fn grid_snap(p: Point, step: f64) -> Point {
+    Point::new((p.x / step).round() * step, (p.y / step).round() * step)
 }
 
 /// Nearest cached candidate within `radius` (world mm) whose item(s) are visible; exact ties take the kind order.
@@ -224,6 +231,10 @@ pub fn marker(painter: &Painter, c: Pos2, kind: SnapKind, color: Color32) {
                 st,
             ));
         }
+        SnapKind::Grid => {
+            painter.line_segment([c + Vec2::new(-h, 0.0), c + Vec2::new(h, 0.0)], st);
+            painter.line_segment([c + Vec2::new(0.0, -h), c + Vec2::new(0.0, h)], st);
+        }
     }
 }
 
@@ -244,6 +255,61 @@ mod tests {
             source: Source::Drawn,
             geom,
         }
+    }
+
+    #[test]
+    fn m20_g1_grid_snap_exact() {
+        let cases = [
+            ((12.3, -7.6, 5.0), (10.0, -10.0)),
+            ((29.0, -31.0, 20.0), (20.0, -40.0)),
+            ((3.1, 4.9, 2.0), (4.0, 4.0)),
+            ((2.5, -2.5, 5.0), (5.0, -5.0)),
+            ((0.04, -0.04, 0.2), (0.0, 0.0)),
+            ((40.0, 60.0, 20.0), (40.0, 60.0)),
+        ];
+        for ((x, y, st), (ex, ey)) in cases {
+            assert_eq!(grid_snap(p(x, y), st), p(ex, ey), "{x} {y} {st}");
+        }
+    }
+
+    #[test]
+    fn m20_g2_grid_snap_with_view_step() {
+        use crate::view::{grid_step, GRID_MIN_PX};
+        use hc_project::Units::{Inch, Mm};
+        let cases = [
+            (Mm, 1.0, (29.0, -31.0), (20.0, -40.0)),
+            (Mm, 3.0, (12.3, -7.6), (10.0, -10.0)),
+            (Mm, 10.0, (3.1, 4.9), (4.0, 4.0)),
+            (Mm, 100.0, (1.23, -0.35), (1.2, -0.4)),
+            (Inch, 1.0, (40.0, 10.0), (50.8, 0.0)),
+            (Inch, 10.0, (3.9, -1.2), (5.08, 0.0)),
+            (Inch, 100.0, (1.0, 0.3), (1.016, 0.254)),
+        ];
+        for (u, z, (x, y), (ex, ey)) in cases {
+            let g = grid_snap(p(x, y), grid_step(z, u, GRID_MIN_PX));
+            assert!(g.distance(p(ex, ey)) < 1e-9, "{u:?} {z}: {g:?}");
+        }
+    }
+
+    #[test]
+    fn m20_g3_matches_drawn_lines() {
+        use crate::view::{grid_step, GRID_MIN_PX};
+        for u in [hc_project::Units::Mm, hc_project::Units::Inch] {
+            for z in [0.37, 1.0, 2.6, 13.0, 77.0] {
+                let step = grid_step(z, u, GRID_MIN_PX);
+                for q in [p(123.456, -78.9), p(-0.3, 0.7)] {
+                    let g = grid_snap(q, step);
+                    assert_eq!(g.x, (q.x / step).round() as i64 as f64 * step);
+                    assert_eq!(g.y, (q.y / step).round() as i64 as f64 * step);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn m20_g4_grid_kind() {
+        assert_eq!(SnapKind::Grid.label(), "Grid");
+        assert!(SnapKind::Grid > SnapKind::Midpoint);
     }
 
     fn count(v: &[(Point, SnapKind)], k: SnapKind) -> usize {

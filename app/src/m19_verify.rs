@@ -21,6 +21,7 @@ fn rect30x10() -> Shape {
 
 fn measure_state() -> AppState {
     let mut s = AppState::new(None);
+    s.prefs.snap_grid = false; // M20: raw points
     s.set_tool(CanvasTool::Measure);
     s
 }
@@ -199,6 +200,7 @@ use hc_project::Geom;
 fn snap_state() -> AppState {
     let mut s = AppState::new(None);
     // Line (0,0)-(40,0): End, Midpoint (20,0). Line (20,-10)-(20,10): crosses it at (20,0) = Intersection too.
+    s.prefs.snap_grid = false; // M20: raw points
     s.add_shape(Shape::Line {
         a: p(0.0, 0.0),
         b: p(40.0, 0.0),

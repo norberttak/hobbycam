@@ -22,6 +22,8 @@ mod m16_verify;
 mod m18_verify;
 #[cfg(test)]
 mod m19_verify;
+#[cfg(test)]
+mod m20_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -89,6 +91,8 @@ pub struct App {
     pub canvas_rect: egui::Rect,
     /// A left-button drag that started on a tab marker moves that tab.
     pub tab_drag: bool,
+    /// Select tool: the key point a drag would grab (computed in canvas input, drawn in paint).
+    pub grab_hover: Option<crate::snap::Snap>,
     /// Export modal: Error = "Cannot export G-code", Warning = "Export anyway?".
     pub export_prompt: Option<hc_toolpath::Severity>,
     /// The icon font and the theme visuals are installed (once, on the first frame).
@@ -109,6 +113,7 @@ impl App {
             box_start: None,
             canvas_rect: egui::Rect::NOTHING,
             tab_drag: false,
+            grab_hover: None,
             export_prompt: None,
             fonts_ready: false,
         }
@@ -537,10 +542,14 @@ mod kittest {
             "Origin X",
             "Origin Y",
             "Pick on drawing",
+            "Snapping",
+            "Snap to objects",
+            "Snap to grid",
         ] {
             assert!(menu_q(&h, name, false).is_some(), "{name}");
         }
         assert!(menu(&h, "Pick on drawing").rect().max.y < 800.0);
+        assert!(menu(&h, "Snap to grid").rect().max.y < 800.0);
         assert!(h.get_by_label("Settings").rect().min.x > 110.0);
     }
 
@@ -1536,7 +1545,8 @@ mod kittest {
         let n = h.state().state.undo.len();
         drag_circle(&mut h, false);
         let c = centre_of(&h, id);
-        assert!(c.approx_eq(P::new(80.0, 50.0), 1e-3), "{c:?}");
+        // M20: pressed at (60,50) the circle grabs its centre, which lands under the pointer at (90,50)
+        assert!(c.approx_eq(P::new(90.0, 50.0), 1e-3), "{c:?}");
         let s = &h.state().state;
         assert_eq!(s.selection, std::collections::BTreeSet::from([id]));
         assert_eq!(s.undo.len(), n + 1);

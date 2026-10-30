@@ -24,7 +24,9 @@ A drawn shape becomes a plain contour, like an imported one.
 
 ## Snaps
 
-While a drawing tool or Set origin is active, the cursor snaps to points within 10 screen pixels.
+While a drawing tool, Measure or Set origin is active, the cursor snaps to object points within 10 screen pixels;
+when none is that close it snaps to the nearest crossing of the fine grid lines. **Settings → Snapping** turns
+either off (both off: the clicked point is used as it is).
 A small marker and a label show what it found:
 
 | Label | Marker | Where |
@@ -35,15 +37,19 @@ A small marker and a label show what it found:
 | Center | circle | centre of a circle or arc |
 | Intersection | X | where two lines or curves cross |
 | Midpoint | triangle | middle of a segment |
+| Grid | plus | the nearest crossing of the fine grid (when no object point is near) |
+
+Round corners is not affected: it always uses the corner you click.
 
 On very large drawings the status bar says "Intersection snaps off: drawing too large".
 
 ## Moving and editing
 
-- Drag an item with the Select tool to move it (and everything else selected). The point you grab snaps to the
-  item's own corners/centres, the drop point to the snap points of other items (same markers as above). Hold
-  `Shift` while dragging to move only horizontally or vertically; `Esc` puts it back. A drag that starts on empty
-  space, or with `Shift` held, selects with a box as before.
+- Drag an item with the Select tool to move it (and everything else selected). You hold it by its key point
+  nearest to the mouse – a circle's centre, a line's end or middle, a corner, an intersection – shown by a marker
+  before you press. The point lands on another item's snap point or on the grid, as set in **Settings → Snapping**
+  (same markers as above). Hold `Shift` while dragging to move only horizontally or vertically; `Esc` puts it back.
+  A drag that starts on empty space, or with `Shift` held, selects with a box as before.
 - Properties shows editable fields for what it recognises, drawn **and** imported: a line (X1/Y1/X2/Y2, Length;
   the start stays put), a circle (Center X/Y, Diameter; also a DXF circle made of two half arcs), a rectangle with
   straight sides along X and Y (X, Y = bottom-left corner, Width, Height, Corner radius; the bottom-left corner stays
