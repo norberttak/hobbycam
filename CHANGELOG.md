@@ -9,6 +9,8 @@ All notable changes to HobbyCAM are listed here. The format follows
 - Measure tool: shows the distance, ΔX, ΔY and angle between two snapped points (temporary, not saved).
 - Move items by their key points (centre, end, midpoint, corner, intersection) and drop them onto other items'
   points or the grid; Snap to objects / Snap to grid in Settings.
+- Layers and Operations can be hidden with two tabs next to the sidebar, to give the drawing more room; the choice is
+  remembered.
 
 ## [0.2.0] - 2026-10-28
 

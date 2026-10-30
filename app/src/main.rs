@@ -24,6 +24,8 @@ mod m18_verify;
 mod m19_verify;
 #[cfg(test)]
 mod m20_verify;
+#[cfg(test)]
+mod m21_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -150,6 +152,7 @@ impl App {
         panels::sim_panel(self, ui);
         panels::issues(self, ui);
         panels::sidebar(self, ui);
+        panels::pane_tabs(self, ui);
         panels::left(self, ui);
         panels::right(self, ui);
         egui::CentralPanel::default()

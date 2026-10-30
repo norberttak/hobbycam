@@ -15,6 +15,10 @@ pub struct Prefs {
     pub snap_objects: bool,
     /// Snap to the visible minor grid when no object point is near.
     pub snap_grid: bool,
+    /// The Layers section of the left pane is shown.
+    pub layers_open: bool,
+    /// The Operations section of the left pane is shown.
+    pub ops_open: bool,
 }
 
 impl Default for Prefs {
@@ -23,6 +27,8 @@ impl Default for Prefs {
             format_version: PREFS_FORMAT_VERSION,
             snap_objects: true,
             snap_grid: true,
+            layers_open: true,
+            ops_open: true,
         }
     }
 }

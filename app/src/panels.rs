@@ -929,15 +929,129 @@ pub fn issues(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn left(app: &mut App, ui: &mut Ui) {
+    let (layers_open, ops_open) = (app.state.prefs.layers_open, app.state.prefs.ops_open);
+    if !layers_open && !ops_open {
+        return; // M21: only the tab strip
+    }
     egui::Panel::left("left")
         .default_size(260.0)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                layers(app, ui);
-                ui.separator();
-                operations(app, ui);
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    if layers_open {
+                        layers(app, ui);
+                    }
+                    if layers_open && ops_open {
+                        ui.separator();
+                    }
+                    if ops_open {
+                        operations(app, ui);
+                    }
+                });
         });
+}
+
+/// Width of the Layers / Operations tab strip (M21).
+pub(crate) const STRIP_W: f32 = 22.0;
+
+/// The strip between the sidebar and the pane: two vertical tabs that show/hide Layers and Operations.
+pub fn pane_tabs(app: &mut App, ui: &mut Ui) {
+    let mut p = app.state.prefs;
+    let dot = ops_dot(&app.state, ui.visuals());
+    egui::Panel::left("pane_tabs")
+        .resizable(false)
+        .exact_size(STRIP_W)
+        .frame(egui::Frame::new().fill(ui.visuals().window_fill))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.add_space(4.0);
+            if pane_tab(ui, "Layers", p.layers_open, None).clicked() {
+                p.layers_open = !p.layers_open;
+            }
+            if pane_tab(ui, "Operations", p.ops_open, Some(dot)).clicked() {
+                p.ops_open = !p.ops_open;
+            }
+        });
+    app.state.set_prefs(p);
+}
+
+/// Colour of the Operations tab dot: Some when an op has issues (error colour if any is an Error).
+pub(crate) fn ops_dot(s: &crate::state::AppState, v: &egui::Visuals) -> Option<egui::Color32> {
+    let mut it = s.issues.iter().filter(|i| i.op.is_some()).peekable();
+    it.peek()?;
+    Some(if it.any(|i| i.severity == hc_toolpath::Severity::Error) {
+        v.error_fg_color
+    } else {
+        v.warn_fg_color
+    })
+}
+
+/// One vertical tab. `dot = Some(_)` reserves the dot room; the inner option paints it.
+fn pane_tab(
+    ui: &mut Ui,
+    name: &str,
+    open: bool,
+    dot: Option<Option<egui::Color32>>,
+) -> egui::Response {
+    use egui::{pos2, vec2, FontId, Rect, Sense, Stroke, StrokeKind};
+    let v = ui.visuals().clone();
+    let text_color = if open {
+        v.strong_text_color()
+    } else {
+        v.text_color()
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(name.into(), FontId::proportional(13.0), text_color);
+    let word_h = galley.size().x + 20.0;
+    let h = word_h + if dot.is_some() { 10.0 } else { 0.0 };
+    let (rect, r) = ui.allocate_exact_size(vec2(STRIP_W, h), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if r.is_pointer_button_down_on() {
+            Some(v.widgets.active.bg_fill)
+        } else if r.hovered() {
+            Some(v.widgets.hovered.bg_fill)
+        } else if open {
+            Some(v.selection.bg_fill)
+        } else {
+            None
+        };
+        if let Some(f) = fill {
+            ui.painter().rect_filled(rect, 0.0, f);
+        }
+        if open {
+            ui.painter().rect_filled(
+                Rect::from_min_size(rect.min, vec2(2.0, h)),
+                0.0,
+                v.hyperlink_color,
+            );
+        }
+        let t = Rect::from_min_size(rect.min, vec2(STRIP_W, word_h));
+        // angle -90 degrees: galley point (x, y) lands at pos + (y, -x)
+        let pos = pos2(
+            t.center().x - galley.size().y / 2.0,
+            t.center().y + galley.size().x / 2.0,
+        );
+        ui.painter().add(
+            egui::epaint::TextShape::new(pos, galley, text_color)
+                .with_angle(-std::f32::consts::FRAC_PI_2),
+        );
+        if let Some(Some(c)) = dot {
+            ui.painter()
+                .circle_filled(pos2(rect.center().x, rect.bottom() - 8.0), 3.0, c);
+        }
+        if r.has_focus() {
+            ui.painter().rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(2.0, v.hyperlink_color),
+                StrokeKind::Inside,
+            );
+        }
+    }
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, name));
+    r.on_hover_text(format!("{} {name}", if open { "Hide" } else { "Show" }))
 }
 
 fn layers(app: &mut App, ui: &mut Ui) {

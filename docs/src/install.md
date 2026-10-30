@@ -59,8 +59,8 @@ Your tool library is the file `tools.json` in your configuration folder:
 | Linux   | `~/.config/hobbycam/` |
 
 Each time the library is saved, the previous version is kept as `tools.json.bak` next to it.
-The snapping choices of the Settings window are kept in `prefs.json` in the same folder; if it is missing or damaged,
-both are on.
+The snapping choices of the Settings window and which of the Layers / Operations lists are shown are kept in
+`prefs.json` in the same folder; if it is missing or damaged, snapping is on and both lists are shown.
 Projects (`.hcam` files) are saved wherever you choose; they also keep a `.bak` of the previous save
 (not in the App Store version). The App Store version keeps its own tool library; it does not share it with the
 `.dmg` version.

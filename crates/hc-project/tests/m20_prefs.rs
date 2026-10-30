@@ -26,7 +26,7 @@ fn p1_missing_file_gives_defaults() {
     let p = Prefs::load(&f).unwrap();
     assert_eq!(p, Prefs::default());
     assert_eq!(p.format_version, 1);
-    assert!(p.snap_objects && p.snap_grid);
+    assert!(p.snap_objects && p.snap_grid && p.layers_open && p.ops_open);
     assert!(!f.exists());
     let _ = fs::remove_dir_all(&d);
 }
@@ -42,7 +42,7 @@ fn p2_save_exact_text_and_roundtrip() {
     p.save(&f).unwrap();
     assert_eq!(
         fs::read_to_string(&f).unwrap(),
-        "{\n  \"format_version\": 1,\n  \"snap_objects\": true,\n  \"snap_grid\": false\n}\n"
+        "{\n  \"format_version\": 1,\n  \"snap_objects\": true,\n  \"snap_grid\": false,\n  \"layers_open\": true,\n  \"ops_open\": true\n}\n"
     );
     assert_eq!(Prefs::load(&f).unwrap(), p);
     let _ = fs::remove_dir_all(&d);
@@ -99,5 +99,35 @@ fn p5_second_save_keeps_bak() {
         fs::read_to_string(d.join("prefs.json.bak")).unwrap(),
         first_text
     );
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn p6_m20_file_and_partial_fields() {
+    let p = load_text(
+        "p6a",
+        r#"{"format_version":1,"snap_objects":false,"snap_grid":true}"#,
+    )
+    .unwrap();
+    assert!(!p.snap_objects && p.snap_grid && p.layers_open && p.ops_open);
+    let p = load_text("p6b", r#"{"format_version":1,"ops_open":false}"#).unwrap();
+    assert!(p.layers_open && !p.ops_open && p.snap_objects && p.snap_grid);
+    assert!(matches!(
+        load_text("p6c", r#"{"format_version":1,"layers_open":"no"}"#),
+        Err(ProjectError::Json(_))
+    ));
+}
+
+#[test]
+fn p7_closed_panes_roundtrip() {
+    let d = scratch("p7");
+    let f = d.join("prefs.json");
+    let p = Prefs {
+        layers_open: false,
+        ops_open: false,
+        ..Prefs::default()
+    };
+    p.save(&f).unwrap();
+    assert_eq!(Prefs::load(&f).unwrap(), p);
     let _ = fs::remove_dir_all(&d);
 }

@@ -576,4 +576,13 @@ fn shot_docs() {
     run(App::new(s), "measure", &|h| {
         assert!(h.query_by_label_contains("Distance ").is_some());
     });
+
+    let (mut s, outside) = bracket_clean();
+    s.select_op(outside);
+    picked(&mut s);
+    s.prefs.layers_open = false;
+    s.prefs.ops_open = false;
+    run(App::new(s), "panes-closed", &|h| {
+        assert!(h.query_by_label("Properties").is_some());
+    });
 }

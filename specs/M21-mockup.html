@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HobbyCAM M21 - collapsible side panes mock-up</title>
+<!-- Mock-up only: icons from a pinned CDN. The app embeds Phosphor-Fill.ttf (no runtime download). -->
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/src/fill/style.css">
+<style>
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #e9ebef; color: #1f2328; }
+  header { padding: 16px 24px 8px; }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 4px 0; max-width: 1150px; }
+  section.opt { margin: 18px 24px 28px; padding: 14px 16px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px #0002; }
+  section.opt h2 { margin: 0 0 2px; font-size: 18px; }
+  section.opt > p { margin: 2px 0 10px; color: #444; max-width: 1150px; }
+  .pair { display: flex; flex-wrap: wrap; gap: 16px; }
+  .cap { font-size: 12px; color: #666; margin-bottom: 4px; }
+  .cap b { color: #1f2328; }
+  .notes { margin: 10px 0 0; padding-left: 18px; max-width: 1150px; font-size: 13px; }
+  .notes li { margin: 3px 0; }
+  code { background: #f1f3f5; padding: 0 3px; border-radius: 3px; }
+  table.cmp { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+  table.cmp th, table.cmp td { border: 1px solid #d8dee7; padding: 3px 8px; text-align: left; }
+  table.cmp th { background: #f4f6fa; }
+  .rec { border-left: 4px solid #0EA5E9; background: #f0f9ff; padding: 8px 12px; margin: 10px 0 0; max-width: 1150px; }
+
+  /* ---------- mock window (M18 option B3, light) ---------- */
+  .win { --win:#EEF1F5; --panel:#FAFBFC; --accent:#0EA5E9; --text:#1E293B; --head:#0F172A; --muted:#64748B; --border:#D8DEE7;
+         --btn:#E2E8F0; --input:#FFFFFF; --rowsel:#E0F2FE; --canvas:#FFFFFF;
+         width: 620px; height: 460px; display: flex; flex-direction: column; font-size: 12px; color: var(--text);
+         background: var(--win); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 14px #0003; }
+  .menubar { display: flex; gap: 14px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  .body { flex: 1; display: flex; min-height: 0; position: relative; }
+  .side { width: 74px; flex: none; padding: 6px 5px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+  .grp { display: grid; grid-template-columns: 24px 24px; gap: 3px 8px; justify-content: center; }
+  .sep { height: 1px; background: var(--border); margin: 2px 2px; }
+  .btn { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 15px;
+         background: var(--g); color: #fff; position: relative; }
+  .btn.disabled { background: var(--btn); color: var(--muted); }
+  .btn.selected { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--head); }
+  .btn.selected::after { content: ""; position: absolute; left: -9px; top: 50%; transform: translateY(-50%); border: 4px solid transparent; border-left-color: var(--head); }
+  .left, .props { width: 150px; flex: none; padding: 6px 8px; background: var(--panel); overflow: hidden; }
+  .left { border-right: 1px solid var(--border); }
+  .props { width: 140px; border-left: 1px solid var(--border); }
+  .h { font-size: 14px; margin: 2px 0 4px; color: var(--head); }
+  .row { display: flex; align-items: center; gap: 5px; height: 19px; padding: 0 3px; border-radius: 4px; white-space: nowrap; }
+  .row.sel { background: var(--rowsel); }
+  .cb { width: 11px; height: 11px; border: 1px solid var(--muted); border-radius: 2px; font-size: 9px; line-height: 10px; text-align: center; flex: none; }
+  .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .muted { color: var(--muted); }
+  .mini { font-size: 10px; padding: 0 4px; border-radius: 4px; background: var(--btn); }
+  .gap { flex: 1; }
+  .canvas { flex: 1; background: var(--canvas); position: relative; min-width: 0; overflow: hidden; }
+  .canvas svg { width: 100%; height: 100%; display: block; }
+  .pr { display: grid; grid-template-columns: 54px 1fr; gap: 4px 6px; align-items: center; }
+  .in { background: var(--input); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; height: 15px; line-height: 15px; white-space: nowrap; overflow: hidden; }
+  .issues { height: 44px; flex: none; padding: 3px 10px; border-top: 1px solid var(--border); background: var(--panel); }
+  .issues .h { font-size: 12px; margin: 0 0 2px; }
+  .issues .row { cursor: pointer; }
+  .issues .row:hover { background: var(--btn); }
+  .warn { color: #B45309; font-weight: 600; }
+  .status { display: flex; padding: 3px 10px; border-top: 1px solid var(--border); color: var(--muted); }
+  .status span { padding: 0 10px; border-right: 1px solid var(--border); }
+  .status span:first-child { padding-left: 0; }
+
+  /* ---------- strip + tabs (the new part) ---------- */
+  .strip { width: 16px; flex: none; background: var(--win); border-right: 1px solid var(--border); display: flex; flex-direction: column;
+           align-items: center; gap: 4px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .strip.r { border-right: none; border-left: 1px solid var(--border); }
+  .strip.whole:hover, .tab:hover { background: var(--btn); }
+  .strip i { font-size: 11px; color: var(--muted); }
+  .vl { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; color: var(--text); white-space: nowrap; }
+  .tab { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 5px 0; border-left: 2px solid transparent; box-sizing: border-box; }
+  .tab.on { background: var(--rowsel); border-left-color: var(--accent); }
+  .tab.on .vl, .tab.on i { color: var(--head); font-weight: 600; }
+  .dot { width: 6px; height: 6px; border-radius: 3px; background: #F59E0B; }
+  .fly { position: absolute; top: 0; bottom: 0; z-index: 3; box-shadow: 6px 0 14px #0003; border-right: 1px solid var(--border); }
+  .hint { position: absolute; right: 6px; bottom: 6px; font-size: 10px; color: var(--muted); background: #fffc; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HobbyCAM M21 - collapsible Layers / Operations pane</h1>
+  <p>Mock of today's main window (M18 option B3, light): tile sidebar, Layers + Operations pane, canvas, Properties (shown because
+  <b>Contour 1</b> is selected), Issues, status bar. Each option shows the <b>expanded</b> and <b>collapsed</b> state side by side.
+  <b>The mocks are live:</b> click a strip or a tab to toggle it; in C click the canvas to close the flyout. Hover the tiles for their names.</p>
+  <p>Widths quoted are for a 1280 x 800 window, measured on <code>docs/src/images/main-window.png</code>: sidebar 110 px
+  (<code>SIDEBAR_W</code>), Layers/Operations pane about 300 px (the op rows with Up/Down/Delete widen it past the 260 px default),
+  Properties about 260 px. Strip = 22 px. Icons come from a pinned CDN for this mock only.</p>
+  <table class="cmp">
+    <tr><th>Option</th><th>Canvas, pane open (Properties hidden / shown)</th><th>Canvas, pane collapsed (Properties hidden / shown)</th><th>Effort</th></tr>
+    <tr><td>today</td><td>870 / 610 px</td><td>-</td><td>-</td></tr>
+    <tr><td>A. one strip</td><td>848 / 588 px</td><td><b>1148 / 888 px</b> (+278 px, +32% / +46%)</td><td>S</td></tr>
+    <tr><td>B. two tabs</td><td>848 / 588 px (one or both sections)</td><td>1148 / 888 px</td><td>M</td></tr>
+    <tr><td>C. flyout</td><td>1148 / 888 px (pane covers 300 px of it)</td><td>1148 / 888 px</td><td>M</td></tr>
+    <tr><td>D. strips on both sides</td><td>848 / 566 px</td><td>1148 / <b>1126</b> px (Properties collapsed too)</td><td>S on top of A</td></tr>
+  </table>
+</header>
+
+<div id="opts"></div>
+
+<section class="opt">
+  <h2>What applies to every option</h2>
+  <ul class="notes">
+    <li><b>Remembered state:</b> per computer, in <code>prefs.json</code>, like M20's snap settings: new <code>bool</code> fields on
+      <code>hc_project::Prefs</code> (default <code>true</code> = open, as today). The struct is <code>#[serde(default)]</code>, so an
+      old <code>prefs.json</code> still loads and <code>PREFS_FORMAT_VERSION</code> stays 1. Written through <code>set_prefs</code> as the Settings snap checkboxes are.
+      The pane <i>width</i> stays egui's own memory as it is today.</li>
+    <li><b>Operation selected while collapsed:</b> Properties is a separate pane, so it still shows the op's fields (name, tool, depths,
+      feed, tabs ...); nothing changes there. Only the Up/Down/Delete/enable controls and <b>New operation</b> need the pane open.</li>
+    <li><b>Issues panel:</b> clicking an issue already selects the op and its geometry, and Properties shows the op. Proposal:
+      <b>do not auto-expand</b> (a pane that opens on its own moves the canvas under the mouse). Cheap extra: an amber dot on the
+      strip / Operations tab when any op has an issue (shown in the mocks), so a collapsed pane does not hide the per-op warning lines.</li>
+    <li><b>Keyboard / menu:</b> View menu gets checkable item(s) that do the same as the strip. No single-letter keys (L, R, C, T, O, F, M are tools);
+      <code>Cmd+B</code> / <code>Cmd+1</code> / <code>Cmd+2</code> / <code>Cmd+3</code> are free today.</li>
+    <li><b>Tests:</b> kittest by label (<code>query_by_label("Hide Layers and Operations")</code>) needs <code>response.widget_info(..)</code> on the painted strip,
+      same as the M18 tiles; the rotated text itself is not visible to kittest/screen readers.</li>
+    <li><b>Dark theme:</b> the strip uses only <code>Visuals</code> colours (<code>window_fill</code>, <code>widgets.hovered.bg_fill</code>,
+      <code>selection.bg_fill</code>), so it follows dark mode with no extra palette. Not mocked.</li>
+  </ul>
+</section>
+
+<script>
+// Sidebar as sidebar_groups() today: draw (+ origin/measure green), edit, file (+ zoom to fit green), ops, settings.
+const G = { draw:"#3B82F6", view:"#22A06B", edit:"#8B5CF6", file:"#64748B", ops:"#F97316", set:"#71717A" };
+const GROUPS = [
+  ["draw", [["cursor","Select (Esc)","selected"],["line-segment","Line (L)"],["rectangle","Rectangle (R)"],["circle","Circle (C)"],
+            ["text-t","Text (T)"],["bezier-curve","Round corners"],["crosshair","Set origin (O)","","view"],["ruler","Measure","","view"]]],
+  ["edit", [["arrow-u-up-left","Undo"],["arrow-u-up-right","Redo","disabled"],["trash","Delete selection","disabled"],
+            ["arrow-counter-clockwise","Rotate selection","disabled"],["flip-horizontal","Flip horizontally","disabled"],["flip-vertical","Flip vertically","disabled"]]],
+  ["file", [["file-plus","New"],["folder-open","Open project..."],["floppy-disk","Save"],["file-arrow-down","Import DXF..."],
+            ["export","Export G-code..."],["corners-out","Zoom to fit (F)","","view"]]],
+  ["ops",  [["path","Show toolpaths","selected"],["play","Simulation"]]],
+  ["set",  [["wrench","Tool library..."],["gear","Settings..."]]],
+];
+const side = () => `<div class="side">${GROUPS.map(([g, items], i) => (i ? `<div class="sep"></div>` : "") +
+  `<div class="grp">${items.map(([ic, tip, st = "", sub]) =>
+    `<div class="btn ${st}" title="${tip}" style="--g:${G[sub || g]}"><i class="ph-fill ph-${ic}"></i></div>`).join("")}</div>`).join("")}</div>`;
+
+const LAYERS = `<div class="h">Layers</div>` + [["Outline","#1E293B",12],["Center","#E03131",11],["Hidden","#E8B400",1],["Title","#1E293B",5]]
+  .map(([n,c,k]) => `<div class="row"><span class="cb">&#10003;</span><span class="sw" style="background:${c}"></span>${n}<span class="muted">(${k})</span></div>`).join("");
+const OPS = `<div class="h">Operations</div>` + [["Contour 1 · T1",1],["Pocket 1 · T1"],["Drill 1 · T2"]]
+  .map(([n,s]) => `<div class="row ${s?"sel":""}"><span class="cb">&#10003;</span>${n}<span class="gap"></span><span class="mini">Up</span><span class="mini">Dn</span></div>` +
+    (n.startsWith("Drill") ? `<div class="row warn" style="font-weight:400;font-size:11px">1 warning</div>` : "")).join("") +
+  `<div style="margin-top:4px"><span class="mini">New operation</span></div>`;
+const PROPS = `<div class="props"><div class="h">Properties</div><div class="pr">
+  <span>Name</span><span class="in">Contour 1</span><span>Kind</span><span>Contour</span><span>Side</span><span class="in">Outside &#9662;</span>
+  <span>Tool</span><span class="in">T1 · 6 mm &#9662;</span><span>Final Z</span><span class="in">-3.00 mm</span><span>Step down</span><span class="in">1.00 mm</span>
+  <span>Feed</span><span class="in">600 mm/min</span><span>RPM</span><span class="in">12000</span></div></div>`;
+const ISSUES = `<div class="issues"><div class="h">Issues (1)</div><div class="row" data-act="issue"><span class="warn">Warning</span> Drill 1: final depth -12.00 mm is below the stock bottom (-10.00 mm)</div></div>`;
+
+const CANVAS = `<svg viewBox="0 0 300 300" preserveAspectRatio="xMidYMid slice">
+  <defs><pattern id="gm" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M10 0H0V10" fill="none" stroke="#E6EAF0"/></pattern>
+  <pattern id="gM" width="50" height="50" patternUnits="userSpaceOnUse"><rect width="50" height="50" fill="url(#gm)"/><path d="M50 0H0V50" fill="none" stroke="#C9D1DC"/></pattern></defs>
+  <rect x="-300" y="-300" width="900" height="900" fill="url(#gM)"/>
+  <rect x="44" y="74" width="212" height="152" rx="16" fill="none" stroke="#1D6FE0" stroke-width="2"/>
+  <rect x="50" y="80" width="200" height="140" rx="10" fill="none" stroke="#FF7A00" stroke-width="2.2"/>
+  <circle cx="150" cy="150" r="32" fill="none" stroke="#1E293B" stroke-width="1.2"/>
+  ${[27,21,15,9].map(r => `<circle cx="150" cy="150" r="${r}" fill="none" stroke="#1D6FE0" stroke-width="1.4"/>`).join("")}
+  ${[[78,108],[222,108],[78,192],[222,192]].map(([x,y]) => `<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="#1E293B" stroke-width="1.2"/><path d="M${x-12} ${y}h24M${x} ${y-12}v24" stroke="#1D6FE0"/>`).join("")}
+  <rect x="290" y="90" width="22" height="120" fill="none" stroke="#1E293B" stroke-width="1.2"/>
+  <path d="M30 250h34" stroke="#DC3232" stroke-width="2"/><path d="M30 250v-34" stroke="#28AA28" stroke-width="2"/>
+</svg>`;
+
+// strips: s = window state
+const chev = (open, right) => `<i class="ph-fill ph-caret-double-${open !== !!right ? "left" : "right"}"></i>`;
+const stripA = (s) => `<div class="strip whole" data-act="left" title="${s.left ? "Hide" : "Show"} Layers and Operations (Cmd+B)">
+  ${chev(s.left)}<span class="vl">Layers · Operations</span><span class="dot" title="an operation has issues"></span></div>`;
+const stripB = (s) => `<div class="strip">
+  <div class="tab ${s.layers?"on":""}" data-act="layers" title="Layers (Cmd+1)"><i class="ph-fill ph-stack"></i><span class="vl">Layers</span></div>
+  <div class="tab ${s.ops?"on":""}" data-act="ops" title="Operations (Cmd+2)"><i class="ph-fill ph-list-checks"></i><span class="vl">Operations</span><span class="dot"></span></div></div>`;
+const stripR = (s) => `<div class="strip whole r" data-act="props" title="${s.props ? "Hide" : "Show"} Properties (Cmd+3)">
+  ${chev(s.props, true)}<span class="vl" style="${s.props ? "" : "font-weight:600;color:var(--head)"}">Properties${s.props ? "" : " · Contour 1"}</span></div>`;
+
+function render(s) {
+  let strip = "", pane = "";
+  if (s.kind === "A" || s.kind === "C" || s.kind === "D") {
+    strip = stripA(s);
+    if (s.left) pane = `<div class="left${s.kind === "C" ? " fly" : ""}" style="${s.kind === "C" ? "left:91px" : ""}">${LAYERS}<div class="sep" style="margin:6px 0"></div>${OPS}</div>`;
+  } else {
+    strip = stripB(s);
+    const parts = [s.layers && LAYERS, s.ops && OPS].filter(Boolean);
+    if (parts.length) pane = `<div class="left">${parts.join(`<div class="sep" style="margin:6px 0"></div>`)}</div>`;
+  }
+  const props = s.kind === "D" ? (s.props ? PROPS : "") + stripR(s) : PROPS;
+  const hint = s.kind === "C" && s.left ? `<span class="hint">click the canvas to close</span>` : "";
+  return `<div class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Draw</span><span>Help</span></div>
+    <div class="body">${side()}${strip}${pane}<div class="canvas" data-act="canvas">${CANVAS}${hint}</div>${props}</div>
+    ${ISSUES}<div class="status"><span>X 42.50 Y 18.00</span><span>Zoom 172%</span><span>1 selected</span></div>`;
+}
+
+function canvasPx(s) {
+  const pane = s.kind === "B" ? (s.layers || s.ops) : s.left;
+  const props = s.kind === "D" ? (s.props ? 260 : 0) + 22 : 260;
+  return 1280 - 110 - 22 - (pane && s.kind !== "C" ? 300 : 0) - props;
+}
+
+const OPTIONS = [
+ { id: "A", title: "A. One strip for the whole pane",
+   blurb: "A 22 px strip always sits between the tile sidebar and the pane, with a chevron and the rotated label \"Layers · Operations\". Click anywhere on the strip to hide/show the whole pane. The strip does not move when the pane opens or closes, so a second click undoes the first.",
+   states: [{ left: true, cap: "Expanded" }, { left: false, cap: "Collapsed" }],
+   notes: [
+    "<b>Behaviour:</b> click the strip, or View &gt; Layers &amp; Operations (checkbox, <code>Cmd+B</code>). Dragging the pane's resize edge past its minimum also closes it (built into egui 0.37, see below). State: <code>Prefs::left_pane_open</code>.",
+    "<b>egui 0.37:</b> strip = <code>egui::Panel::left(\"left_strip\").exact_size(22.0).resizable(false)</code> shown right after <code>sidebar</code>; inside, one <code>ui.allocate_exact_size(ui.available_size(), Sense::click())</code> painted with the chevron glyph (Phosphor <code>caret-double-left/right</code>, two new constants in <code>icons.rs</code> + the glyph test) and the label via <code>painter.add(TextShape::new(pos, galley, color).with_angle(-FRAC_PI_2))</code> (<code>epaint::TextShape::with_angle</code> exists in 0.37). The pane becomes <code>Panel::left(\"left\").default_size(260.0).drag_to_open(false).show_collapsible(ui, &amp;mut open, ..)</code>, which slides in/out and can flip <code>open</code> itself (drag-to-collapse), so the bool is saved when it changes.",
+    "<b>Cheap extra:</b> make the two headings <code>egui::CollapsingHeader</code>s inside the pane, so Layers alone can be folded to one line while Operations stays (session-only, egui memory). That gives most of B for ~10 lines.",
+    "<b>Effort:</b> S. <b>Risk:</b> low; the only new widget is the painted strip." ] },
+ { id: "B", title: "B. Two independent tabs (IDE tool windows)",
+   blurb: "The strip holds two vertical tabs, \"Layers\" and \"Operations\", each with an icon. Each tab shows/hides its own section; both open = stacked as today, one open = that section gets the full pane height, none = collapsed. The active tab is tinted with the accent bar.",
+   states: [{ layers: true, ops: true, cap: "Both open (as today)" }, { layers: false, ops: true, cap: "Only Operations open" }, { layers: false, ops: false, cap: "Collapsed" }],
+   notes: [
+    "<b>Behaviour:</b> click a tab, or View &gt; Layers (<code>Cmd+1</code>) / Operations (<code>Cmd+2</code>). State: <code>Prefs::layers_open</code>, <code>Prefs::ops_open</code>. The pane exists while either is open; its width is shared by both sections.",
+    "<b>egui:</b> same strip panel as A, but two click areas, each with a Phosphor icon (<code>stack</code>, <code>list-checks</code> - 2 more icons) plus rotated text; selected tab = <code>selection.bg_fill</code> + 2 px accent bar. Pane = <code>show_collapsible(ui, &amp;mut (layers || ops), ..)</code> with a copy of the bool (drag-to-collapse then closes both) and <code>if layers { layers(..) }</code> / <code>if ops { operations(..) }</code> inside the existing <code>ScrollArea</code>.",
+    "<b>Issues click:</b> this is the one option where auto-opening just the Operations tab would be cheap and not too jumpy; still proposed as off (dot on the tab instead).",
+    "<b>Effort:</b> M (two tabs, four states to test, more icons). <b>Value over A:</b> small - there are only two sections and Layers is short; A + CollapsingHeader covers the same need." ] },
+ { id: "C", title: "C. Flyout over the canvas",
+   blurb: "Collapsed is the same strip as A. Clicking it opens the pane as a floating panel over the canvas (with a shadow); the canvas never changes width. It closes when you click the strip again or anywhere on the canvas.",
+   states: [{ left: true, cap: "Open (floating)" }, { left: false, cap: "Collapsed" }],
+   notes: [
+    "<b>Behaviour:</b> strip click / <code>Cmd+B</code> / Esc toggles; a canvas click closes it. Always starts closed, so nothing to remember in <code>prefs.json</code> (or remember \"pinned\", which turns it into A).",
+    "<b>egui:</b> strip as A; pane = <code>egui::Area::new(\"left_flyout\").order(Order::Foreground).fixed_pos(strip.rect.right_top())</code> + <code>Frame::popup</code>, fixed 300 px wide, canvas height, own <code>ScrollArea</code>. Close-on-outside-click must be hand-made: the canvas must <i>swallow</i> that click (not also deselect / start a box selection), and the ComboBoxes of the New operation form open their own popups, which count as \"outside\" and would close the flyout unless checked.",
+    "<b>Trade-off:</b> the canvas keeps its full width (no zoom jump), but the pane hides the left 300 px of the drawing while open, you cannot toggle a layer and click the drawing without it closing, and the half-filled New operation form is closed by the first canvas click. Every visit costs an extra click.",
+    "<b>Effort:</b> M. <b>Risk:</b> medium (click routing, nested popups)." ] },
+ { id: "D", title: "D. A, plus the same strip for Properties on the right",
+   blurb: "Option A on the left, and a 22 px strip at the right edge for Properties. Collapsed, the strip names what Properties would show (\"Properties · Contour 1\") in bold, so a hidden form is not forgotten. Not asked for; shown because it nearly doubles the canvas when an op is being edited.",
+   states: [{ left: true, props: true, cap: "Both open" }, { left: false, props: false, cap: "Both collapsed" }],
+   notes: [
+    "<b>Behaviour:</b> right strip / View &gt; Properties (<code>Cmd+3</code>). State: <code>Prefs::props_open</code>. The strip is shown always (even with nothing selected) so the canvas width does not jump on every selection change; today the pane appears/disappears with the selection anyway.",
+    "<b>Catch:</b> Properties also holds the draw forms (Line/Rectangle/Circle/Text values) and the Measure readout. With it collapsed, picking a tool \"does nothing visible\" - a real usability risk. A fix (auto-open while a draw tool / Measure is active) adds rules.",
+    "<b>egui:</b> same strip widget reused with <code>Panel::right</code>; <code>right()</code> uses <code>show_collapsible</code>. Text could carry the op/shape name.",
+    "<b>Effort:</b> S on top of A. <b>Value:</b> moderate; Properties already hides itself when nothing is selected." ] },
+];
+
+const wins = [];
+document.getElementById("opts").innerHTML = OPTIONS.map(o => `
+<section class="opt">
+  <h2>${o.title}</h2>
+  <p>${o.blurb}</p>
+  <div class="pair">${o.states.map(st => { const s = { ...st, kind: o.id }; wins.push(s);
+    return `<div><div class="cap" id="cap${wins.length - 1}"></div><div class="win" id="w${wins.length - 1}"></div></div>`; }).join("")}</div>
+  <ul class="notes">${o.notes.map(n => `<li>${n}</li>`).join("")}</ul>
+</section>`).join("") + `
+<section class="opt">
+  <h2>Recommendation</h2>
+  <div class="rec"><b>A, with the two headings made collapsible inside the pane.</b> One strip, one remembered bool in <code>prefs.json</code>,
+  egui 0.37 does the slide and drag-to-collapse (<code>Panel::show_collapsible</code>); +278 px canvas at 1280 x 800 (870 -&gt; 1148, or 610 -&gt; 888 with
+  Properties shown). Effort S. Issues clicks keep working without expanding (Properties shows the op); the amber dot tells you a collapsed
+  op has warnings. B adds a second tab for little gain; C costs clicks and has fiddly click routing; D is worth it only if you also want
+  Properties hideable and accept that hidden draw forms can confuse - easy to add later because it reuses A's strip.</div>
+</section>`;
+
+function paint(k) {
+  const s = wins[k];
+  document.getElementById("w" + k).innerHTML = render(s);
+  document.getElementById("cap" + k).innerHTML = `<b>${s.cap}</b> - canvas about ${canvasPx(s)} px wide at 1280 x 800${s.kind === "D" && !s.props ? "" : " (Properties shown)"}`;
+}
+document.addEventListener("click", e => {
+  const w = e.target.closest(".win"), a = e.target.closest("[data-act]");
+  if (!w || !a) return;
+  const k = +w.id.slice(1), s = wins[k], act = a.dataset.act;
+  if (act === "left") s.left = !s.left;
+  else if (act === "layers") s.layers = !s.layers;
+  else if (act === "ops") s.ops = !s.ops;
+  else if (act === "props") s.props = !s.props;
+  else if (act === "canvas" && s.kind === "C") s.left = false;
+  else return;
+  paint(k);
+});
+wins.forEach((_, k) => paint(k));
+</script>
+</body>
+</html>
