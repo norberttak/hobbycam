@@ -6,10 +6,11 @@ From top to bottom and left to right:
 
 - **Menu bar**: File, Edit, View, Draw, Help.
 - **Messages** under the menu: import notes, export results and errors. **Dismiss** removes one.
-- **Icon sidebar** (two columns) on the far left, buttons coloured by group (drawing blue, origin, measure and zoom
-  green, edit purple, file slate, toolpaths and simulation orange, tools and settings grey). It has the same commands as
-  the menus. Hover a button to see its name and shortcut. The active tool and the toggles that are on have a dark ring
-  and a small arrow. Grey buttons cannot be used right now (for example Delete with nothing selected).
+- **Icon sidebar** (two columns) on the far left, running down to the status bar, buttons coloured by group (drawing
+  blue, origin, measure and zoom green, edit purple, file slate, toolpaths and simulation orange, tools and settings
+  grey). It has the same commands as the menus. Hover a button to see its name and shortcut. The active tool and the
+  toggles that are on have a dark ring and a small arrow. Grey buttons cannot be used right now (for example Delete
+  with nothing selected).
 - **Tab strip** right of the sidebar with two vertical tabs, **Layers** and **Operations**. Click a tab to show or
   hide that list; with both hidden the drawing gets the room. A highlighted tab is open. A red or orange dot on
   **Operations** means a check found something in an operation (see **Issues**). The choice is kept on this
@@ -25,8 +26,8 @@ From top to bottom and left to right:
   the editable details (position, size) and the Transform box of the geometry you clicked on the canvas, or the
   number form of the active drawing tool. It is hidden when nothing is selected. It also works while the Operations
   list is hidden.
-- **Issues** panel at the bottom, only when a [sanity check](sanity.md) found something. Click an issue to select its
-  operation and item. A hidden Operations list stays hidden.
+- **Issues** panel at the bottom, right of the sidebar, only when a [sanity check](sanity.md) found something. Click
+  an issue to select its operation and item. A hidden Operations list stays hidden.
 - **Status bar**: cursor position (plus "Work X … Y …" when the origin is not the drawing origin), zoom in percent,
   "*n* selected", and the hint of the active tool, for example "Line: click the start point · Esc cancels", and with
   Measure the distance, ΔX, ΔY and angle.

@@ -26,6 +26,8 @@ mod m19_verify;
 mod m20_verify;
 #[cfg(test)]
 mod m21_verify;
+#[cfg(test)]
+mod m22_verify;
 mod panels;
 #[cfg(test)]
 mod release_check;
@@ -149,9 +151,9 @@ impl App {
         panels::menu(self, ui);
         panels::messages(self, ui);
         panels::status_bar(self, ui);
+        panels::sidebar(self, ui); // before the bottom panels: runs down to the status bar
         panels::sim_panel(self, ui);
         panels::issues(self, ui);
-        panels::sidebar(self, ui);
         panels::pane_tabs(self, ui);
         panels::left(self, ui);
         panels::right(self, ui);
@@ -1013,7 +1015,7 @@ mod kittest {
         side(h, name).accesskit_node().is_disabled()
     }
 
-    const SIDEBAR: [&str; 23] = [
+    const SIDEBAR: [&str; 25] = [
         "New",
         "Open project…",
         "Save",
@@ -1030,6 +1032,8 @@ mod kittest {
         "Rectangle",
         "Circle",
         "Round corners",
+        "Trim",
+        "Extend",
         "Set origin",
         "Measure",
         "Zoom to fit",
@@ -1116,6 +1120,8 @@ mod kittest {
             ("Circle", state::CanvasTool::Circle),
             ("Text", state::CanvasTool::Text),
             ("Round corners", state::CanvasTool::Fillet),
+            ("Trim", state::CanvasTool::Trim),
+            ("Extend", state::CanvasTool::Extend),
             ("Set origin", state::CanvasTool::SetOrigin),
             ("Measure", state::CanvasTool::Measure),
         ];
@@ -1194,16 +1200,22 @@ mod kittest {
         let mut h = harness_for(s);
         h.run();
         let status_top = h.get_by_label("X – Y –").rect().min.y;
-        let issues_top = h.get_by_label_contains("Issues (").rect().min.y;
-        let bottom = status_top.min(issues_top);
+        let issues = h.get_by_label_contains("Issues (");
+        let bottom = status_top; // the sidebar runs down to the status bar
         let mut xs = std::collections::BTreeSet::new();
+        let mut tiles_right = 0.0f32;
         for name in SIDEBAR {
             let r = side(&h, name).rect();
+            tiles_right = tiles_right.max(r.max.x);
             assert!(r.max.y <= bottom, "{name} at {r:?}, panel bottom {bottom}");
             assert!(r.min.y >= 0.0);
             xs.insert(r.min.x as i32);
         }
         assert_eq!(xs.len(), 2, "two columns: {xs:?}");
+        assert!(
+            issues.rect().min.x >= tiles_right,
+            "Issues right of the sidebar"
+        );
     }
 
     use hc_geom::Point as P;
@@ -1446,6 +1458,111 @@ mod kittest {
         h.key_press(egui::Key::M);
         h.run();
         assert_eq!(h.state().state.tool, state::CanvasTool::Measure);
+    }
+
+    /// Fixed view (2 px/mm) with the given lines / circles; nothing selected.
+    fn trim_harness(shapes: Vec<state::Shape>) -> (Harness<'static, App>, Vec<u64>) {
+        let mut s = AppState::new(None);
+        let ids: Vec<u64> = shapes
+            .into_iter()
+            .map(|sh| s.add_shape(sh).unwrap()[0])
+            .collect();
+        s.clear_selection();
+        s.dirty = false;
+        s.commit_undo(true);
+        let mut h = harness_for(s);
+        h.run();
+        let st = &mut h.state_mut().state;
+        st.fit_pending = false;
+        st.view = view::View {
+            zoom: 2.0,
+            offset: egui::vec2(100.0, 500.0),
+        };
+        h.run();
+        (h, ids)
+    }
+
+    fn shape_line(a: (f64, f64), b: (f64, f64)) -> state::Shape {
+        state::Shape::Line {
+            a: P::new(a.0, a.1),
+            b: P::new(b.0, b.1),
+        }
+    }
+
+    fn line_ends(h: &Harness<App>, id: u64) -> (P, P) {
+        match &h.state().state.item(id).unwrap().geom {
+            hc_project::Geom::Contour(c) => (c.start(), c.end()),
+            hc_project::Geom::Point(_) => panic!(),
+        }
+    }
+
+    /// M22 K1.
+    #[test]
+    fn m22_k1_sidebar_hint() {
+        for (name, tool) in [
+            ("Trim", state::CanvasTool::Trim),
+            ("Extend", state::CanvasTool::Extend),
+        ] {
+            let (mut h, _) = trim_harness(vec![shape_line((0.0, 0.0), (40.0, 0.0))]);
+            click_side(&mut h, name);
+            assert_eq!(h.state().state.tool, tool);
+            assert!(toggled(&side(&h, name)));
+            let text = format!("{name}: select the limiting objects first");
+            assert!(h.query_all_by_label_contains(&text).count() >= 2, "{text}");
+        }
+    }
+
+    /// M22 K2.
+    #[test]
+    fn m22_k2_trim_click_and_undo() {
+        let (mut h, ids) = trim_harness(vec![
+            shape_line((0.0, 0.0), (40.0, 0.0)),
+            shape_line((20.0, -10.0), (20.0, 10.0)),
+        ]);
+        click_world(&mut h, P::new(20.0, 5.0));
+        assert!(h.state().state.selection.contains(&ids[1]));
+        click_side(&mut h, "Trim");
+        click_world(&mut h, P::new(30.0, 0.0));
+        let (a, b) = line_ends(&h, ids[0]);
+        assert!(a.approx_eq(P::new(0.0, 0.0), 1e-9) && b.approx_eq(P::new(20.0, 0.0), 1e-9));
+        h.hover_at(egui::pos2(700.0, 300.0));
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        let (_, b) = line_ends(&h, ids[0]);
+        assert!(b.approx_eq(P::new(40.0, 0.0), 1e-9));
+    }
+
+    /// M22 K3.
+    #[test]
+    fn m22_k3_extend_to_circle() {
+        let (mut h, ids) = trim_harness(vec![
+            shape_line((0.0, 0.0), (10.0, 0.0)),
+            state::Shape::Circle {
+                c: P::new(30.0, 0.0),
+                r: 5.0,
+            },
+        ]);
+        click_world(&mut h, P::new(35.0, 0.0));
+        click_side(&mut h, "Extend");
+        click_world(&mut h, P::new(9.0, 0.0));
+        let (_, b) = line_ends(&h, ids[0]);
+        assert!(b.approx_eq(P::new(25.0, 0.0), 1e-9), "{b:?}");
+    }
+
+    /// M22 K4.
+    #[test]
+    fn m22_k4_draw_menu() {
+        for (name, tool) in [
+            ("Trim", state::CanvasTool::Trim),
+            ("Extend", state::CanvasTool::Extend),
+        ] {
+            let (mut h, _) = trim_harness(vec![shape_line((0.0, 0.0), (10.0, 0.0))]);
+            open_menu(&mut h, "Draw");
+            menu(&h, name).click();
+            h.run();
+            assert_eq!(h.state().state.tool, tool);
+        }
     }
 
     /// M19 K2.

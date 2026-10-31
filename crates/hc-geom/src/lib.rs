@@ -10,6 +10,7 @@ mod segment;
 pub mod shapes;
 mod transform;
 mod tree;
+pub mod trim;
 
 pub use bbox::BBox;
 pub use chain::chain_segments;

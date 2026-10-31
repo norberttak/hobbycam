@@ -1,7 +1,7 @@
 # Simulation
 
-Open **View → Simulation** (or the play button in the sidebar). A bar appears above the status bar and the canvas
-shows the job as it runs.
+Open **View → Simulation** (or the play button in the sidebar). A bar appears above the status bar, right of the
+sidebar, and the canvas shows the job as it runs.
 
 ![Simulation at 60 % of the job](images/simulation.png)
 

@@ -11,6 +11,10 @@ All notable changes to HobbyCAM are listed here. The format follows
   points or the grid; Snap to objects / Snap to grid in Settings.
 - Layers and Operations can be hidden with two tabs next to the sidebar, to give the drawing more room; the choice is
   remembered.
+- Trim and Extend tools: cut lines, arcs and circles at selected limiting objects, or lengthen open ends to them.
+
+### Changed
+- The sidebar now runs down to the status bar; the Simulation and Issues panels sit right of it.
 
 ## [0.2.0] - 2026-10-28
 
