@@ -198,6 +198,8 @@ pub fn menu(app: &mut App, ui: &mut Ui) {
                 tool_item(app, ui, "Circle", "C", CanvasTool::Circle);
                 tool_item(app, ui, "Text", "T", CanvasTool::Text);
                 tool_item(app, ui, "Round corners", "", CanvasTool::Fillet);
+                tool_item(app, ui, "Trim", "", CanvasTool::Trim);
+                tool_item(app, ui, "Extend", "", CanvasTool::Extend);
                 tool_item(app, ui, "Measure", "", CanvasTool::Measure);
                 ui.separator();
                 tool_item(app, ui, "Set origin", "O", CanvasTool::SetOrigin);
@@ -481,6 +483,8 @@ pub(crate) fn sidebar_groups(app: &App, ctx: &egui::Context) -> Vec<Vec<SideEntr
             tool(icons::CIRCLE, "Circle", "C", CanvasTool::Circle),
             tool(icons::TEXT, "Text", "T", CanvasTool::Text),
             tool(icons::FILLET, "Round corners", "", CanvasTool::Fillet),
+            tool(icons::TRIM, "Trim", "", CanvasTool::Trim),
+            tool(icons::EXTEND, "Extend", "", CanvasTool::Extend),
             tool(icons::ORIGIN, "Set origin", "O", CanvasTool::SetOrigin),
             tool(icons::MEASURE, "Measure", "", CanvasTool::Measure),
         ],
@@ -751,7 +755,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
                 ui.separator();
                 ui.label(measure_summary(a, b, u));
             }
-            if let Some(h) = s.tool.hint(s.pending.is_some()) {
+            if let Some(h) = s.hint() {
                 ui.separator();
                 let cap = if s.snap_cache.capped {
                     " · Intersection snaps off: drawing too large"
@@ -1234,6 +1238,9 @@ pub fn right(app: &mut App, ui: &mut Ui) {
                     .cloned();
                 match op {
                     _ if app.state.tool == CanvasTool::Measure => measure_form(app, ui),
+                    _ if matches!(app.state.tool, CanvasTool::Trim | CanvasTool::Extend) => {
+                        trim_form(app, ui)
+                    }
                     _ if !matches!(app.state.tool, CanvasTool::Select | CanvasTool::SetOrigin) => {
                         draw_form(app, ui)
                     }
@@ -1424,6 +1431,22 @@ fn measure_form(app: &mut App, ui: &mut Ui) {
         }
         ui.weak(s.tool.hint(s.pending.is_some()).unwrap_or_default());
         ui.weak("Drawing coordinates; not saved");
+    });
+}
+
+/// Trim / Extend: hint and the number of limiting objects (nothing to type).
+fn trim_form(app: &mut App, ui: &mut Ui) {
+    let s = &app.state;
+    ui.group(|ui| {
+        ui.strong(if s.tool == CanvasTool::Trim {
+            "Trim"
+        } else {
+            "Extend"
+        });
+        ui.label(s.hint().unwrap_or_default());
+        if !s.trim_limits.is_empty() {
+            ui.label(format!("Limiting objects: {}", s.trim_limits.len()));
+        }
     });
 }
 

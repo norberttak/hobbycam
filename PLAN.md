@@ -258,6 +258,18 @@ Spec: `specs/M21.md`, mock-up `specs/M21-mockup.html` (option B chosen). Branch 
   (error) or orange (warning) dot on the Operations tab when an operation has issues.
 - Docs: `interface.md` (+ new `panes-closed.png`), `install.md`, `CHANGELOG.md`; all screenshots regenerated.
 
+### M22 – Trim and extend
+Spec: `specs/M22.md`. Branch `feature/trim-extend`.
+- Select the limiting objects (lines, circles, arcs, any contour) with Select, then pick **Trim** or **Extend**
+  (sidebar tiles + Draw menu, no shortcut); the limits are captured when the tool starts. Nothing selected → hint
+  "select the limiting objects first", clicks do nothing.
+- Trim: click the piece of a segment between the nearest crossings (or a corner/end and a crossing) to remove it;
+  closed shapes open, a middle cut splits an open contour into two items (both stay in its operations), a circle
+  becomes an arc. Extend: click near an open end; the line/arc grows to the nearest limit. One undo step per click,
+  hover preview, `Esc` leaves.
+- New `hc_geom::trim`, `Project::split_item`; the sidebar runs down to the status bar so the extra row fits.
+- Docs: `drawing.md`, `shortcuts.md`, `interface.md`, `CHANGELOG.md`; all screenshots regenerated.
+
 ## Agent workflow
 
 Three subagents live in `.claude/agents/`. The main session is the orchestrator and the only one that talks to you.

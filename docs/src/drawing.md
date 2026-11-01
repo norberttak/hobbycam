@@ -11,6 +11,7 @@ Pick a tool in the **Draw** menu or the sidebar. The status bar tells you what t
 - **Circle** (`C`): click the centre, then a point on the circle.
 - **Text** (`T`): click the start of the baseline.
 - **Round corners**: see below.
+- **Trim** and **Extend**: see below.
 - **Measure**: see below.
 
 ![Drawing a rectangle from a snapped point](images/drawing.png)
@@ -62,6 +63,10 @@ On very large drawings the status bar says "Intersection snaps off: drawing too 
 ## Round corners
 
 **Round corners** (sidebar or Draw menu) rounds sharp corners with an arc of the **Radius** set in Properties. Click a corner (the highlighted corner shows the arc it will get), or select contours first and click **Round all corners of selection**. It works on drawn and imported geometry. Only corners between two straight lines are rounded; corners next to an arc, corners that are already smooth and the ends of open lines are left alone. When the radius does not fit (the sides are too short), the corner is skipped and a message says how many were skipped and why (a click says the largest radius that fits). Undo reverts it; operations and tabs stay on the item. A sharp rectangle rounded at all four corners is edited as a rectangle with that Corner radius.
+
+## Trim and extend
+
+First select the limiting objects (lines, circles, arcs, any contour) with the Select tool, then pick **Trim** or **Extend** (sidebar or Draw menu). With nothing selected the tool only tells you to select the limits first. **Trim**: click the piece of a line, arc or circle you want to cut away – the piece between the two nearest crossings with the limits, or between a corner/end and the nearest crossing; it is highlighted before you click. A trimmed circle becomes an arc, a trimmed closed shape becomes an open one, and cutting a piece out of the middle of an open line or polyline splits it into two items; operations that used the item then use both, and tabs on the removed piece are dropped. A Pocket or Contour inside/outside operation needs closed shapes and reports an error after a closed shape is opened. **Extend**: click near the end of an open line, arc or polyline; it grows along its direction (an arc along its circle) to the nearest limit, shown dashed before you click. Each further click goes on to the next limit. The selected objects stay the limits until you leave the tool (`Esc`); a limit can be trimmed too, and an object can limit itself. Every click is one Undo step.
 
 ## Measure
 

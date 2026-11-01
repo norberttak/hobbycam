@@ -6,7 +6,7 @@ use eframe::egui::{self, Rect};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 
-const NAMES: [&str; 24] = [
+const NAMES: [&str; 26] = [
     "New",
     "Open project…",
     "Save",
@@ -24,6 +24,8 @@ const NAMES: [&str; 24] = [
     "Circle",
     "Text",
     "Round corners",
+    "Trim",
+    "Extend",
     "Set origin",
     "Measure",
     "Zoom to fit",
@@ -33,13 +35,15 @@ const NAMES: [&str; 24] = [
     "Settings…",
 ];
 
-const TOOLS: [(&str, CanvasTool); 8] = [
+const TOOLS: [(&str, CanvasTool); 10] = [
     ("Select", CanvasTool::Select),
     ("Line", CanvasTool::Line),
     ("Rectangle", CanvasTool::Rect),
     ("Circle", CanvasTool::Circle),
     ("Text", CanvasTool::Text),
     ("Round corners", CanvasTool::Fillet),
+    ("Trim", CanvasTool::Trim),
+    ("Extend", CanvasTool::Extend),
     ("Set origin", CanvasTool::SetOrigin),
     ("Measure", CanvasTool::Measure),
 ];
@@ -265,8 +269,7 @@ fn m18v_ring_and_arrow_never_overlap_or_clip() {
         let panel_left = rect(&h, "Select").min.x - 12.0;
         let panel_right = panel_left + crate::panels::SIDEBAR_W;
         let status_top = h.get_by_label("X – Y –").rect().min.y;
-        let issues_top = h.get_by_label_contains("Issues (").rect().min.y;
-        let bottom = status_top.min(issues_top);
+        let bottom = status_top;
         let menu_bottom = crate::kittest::menu_q(&h, "File", false)
             .unwrap()
             .rect()
@@ -314,8 +317,7 @@ fn m18v_sidebar_vertical_fit_report() {
         let mut h = harness_sized(s, egui::vec2(w, hgt), None);
         h.run();
         let status_top = h.get_by_label("X – Y –").rect().min.y;
-        let issues_top = h.get_by_label_contains("Issues (").rect().min.y;
-        let bottom = status_top.min(issues_top);
+        let bottom = status_top;
         let last = NAMES.iter().map(|n| rect(&h, n).max.y).fold(0.0, f32::max);
         eprintln!(
             "M18V fit {w}x{hgt} sim={sim}: last tile bottom {last}, panels top {bottom}, slack after ring {}",

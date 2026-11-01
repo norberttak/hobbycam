@@ -57,6 +57,8 @@ From top to bottom, two buttons per row:
 | Circle | `C` |
 | Text | `T` |
 | Round corners | – |
+| Trim | – |
+| Extend | – |
 | Set origin | `O` |
 | Measure | – |
 | Undo | `Cmd/Ctrl+Z` |

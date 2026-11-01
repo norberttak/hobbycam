@@ -5,6 +5,7 @@ use crate::snap::{self, Snap, SnapCache, SnapKind};
 use crate::view::{grid_step, View};
 use hc_dxf::{ImportOptions, ImportWarning};
 use hc_geom::fillet::{self, FilletSkip};
+use hc_geom::trim::{self, TRIM_TOL};
 use hc_geom::{shapes, BBox, Contour, Point, Segment, Transform, EPS};
 use hc_post::GcodeFile;
 use hc_project::{
@@ -125,6 +126,8 @@ pub enum CanvasTool {
     Circle,
     Text,
     Fillet,
+    Trim,
+    Extend,
     Measure,
 }
 
@@ -142,6 +145,8 @@ impl CanvasTool {
             (CanvasTool::Circle, true) => "Circle: click a point on the circle",
             (CanvasTool::Text, _) => "Text: click the start of the baseline",
             (CanvasTool::Fillet, _) => "Round corners: click a sharp corner",
+            (CanvasTool::Trim, _) => "Trim: click the piece to cut away",
+            (CanvasTool::Extend, _) => "Extend: click near the end to lengthen",
             (CanvasTool::Measure, false) => "Measure: click the first point",
             (CanvasTool::Measure, true) => "Measure: click the second point",
         })
@@ -182,6 +187,17 @@ pub struct FilletHover {
     pub vertex: Point,
     /// The arc that a click would add, or why it would not.
     pub result: Result<Segment, FilletSkip>,
+}
+
+/// The pick under the cursor for Trim / Extend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrimHover {
+    pub item: u64,
+    pub seg: usize,
+    /// Trim: the piece a click removes; Extend: the piece a click adds; None = nothing would happen.
+    pub piece: Option<Segment>,
+    /// The item's new contour(s) (empty when `piece` is None).
+    pub parts: Vec<Contour>,
 }
 
 /// An element drag in progress (Select tool, see `start_move`).
@@ -261,6 +277,8 @@ impl DrawForm {
             CanvasTool::Select
             | CanvasTool::SetOrigin
             | CanvasTool::Fillet
+            | CanvasTool::Trim
+            | CanvasTool::Extend
             | CanvasTool::Measure => None,
         }
     }
@@ -304,6 +322,8 @@ pub struct AppState {
     /// `prefs.json` next to the tool library; None = in memory only.
     pub prefs_path: Option<PathBuf>,
     pub selection: BTreeSet<u64>,
+    /// Trim/Extend: the limiting items, captured from the selection when the tool starts (M22).
+    pub trim_limits: Vec<u64>,
     pub selected_op: Option<u64>,
     /// (item, index into that item's tab positions) of the selected op.
     pub selected_tab: Option<(u64, usize)>,
@@ -383,6 +403,7 @@ impl AppState {
             prefs,
             prefs_path,
             selection: BTreeSet::new(),
+            trim_limits: Vec::new(),
             selected_op: None,
             selected_tab: None,
             hidden_layers: HashSet::new(),
@@ -997,6 +1018,11 @@ impl AppState {
         self.tool = t;
         self.pending = None;
         self.measure = None;
+        self.trim_limits = if matches!(t, CanvasTool::Trim | CanvasTool::Extend) {
+            self.selection.iter().copied().collect()
+        } else {
+            Vec::new()
+        };
     }
 
     /// Escape: cancels a move drag, else drops a pending first point, else leaves the tool, else clears the selection and the selected operation.
@@ -1095,7 +1121,8 @@ impl AppState {
     /// A primary click of the active tool at `p` (already snapped when `snapped`).
     pub fn canvas_click(&mut self, p: Point, snapped: bool) {
         match self.tool {
-            CanvasTool::Select | CanvasTool::Fillet => {} // Fillet: the canvas calls fillet_click
+            // Fillet / Trim / Extend: the canvas calls fillet_click / trim_click
+            CanvasTool::Select | CanvasTool::Fillet | CanvasTool::Trim | CanvasTool::Extend => {}
             CanvasTool::Measure => match self.pending.take() {
                 None => {
                     self.pending = Some(p);
@@ -1137,6 +1164,166 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Status bar / Properties hint: Trim/Extend without limits ask for them first.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self.tool {
+            CanvasTool::Trim if self.trim_limits.is_empty() => {
+                Some("Trim: select the limiting objects first")
+            }
+            CanvasTool::Extend if self.trim_limits.is_empty() => {
+                Some("Extend: select the limiting objects first")
+            }
+            t => t.hint(self.pending.is_some()),
+        }
+    }
+
+    /// Segments of every `trim_limits` contour item except segment `skip.1` of item `skip.0`.
+    fn limit_segments(&self, skip: (u64, usize)) -> Vec<Segment> {
+        let mut out = Vec::new();
+        for &id in &self.trim_limits {
+            if let Some(Geom::Contour(c)) = self.item(id).map(|i| &i.geom) {
+                for (k, sg) in c.segments.iter().enumerate() {
+                    if (id, k) != skip {
+                        out.push(*sg);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Trim/Extend pick with its result; None outside these tools, with empty `trim_limits`, or when no segment is
+    /// within `tol` of `p`.
+    pub fn trim_hover(&self, p: Point, tol: f64) -> Option<TrimHover> {
+        let extend = match self.tool {
+            CanvasTool::Trim => false,
+            CanvasTool::Extend => true,
+            _ => return None,
+        };
+        if self.trim_limits.is_empty() {
+            return None;
+        }
+        let mut best: Option<(f64, u64, usize, f64)> = None;
+        for it in self.project.items.iter().filter(|i| self.is_visible(i)) {
+            let Geom::Contour(c) = &it.geom else { continue };
+            if extend && c.closed {
+                continue;
+            }
+            if let Some((seg, d, dist)) = trim::nearest_segment(c, p) {
+                if dist <= tol && best.is_none_or(|b| dist < b.0) {
+                    best = Some((dist, it.id, seg, d));
+                }
+            }
+        }
+        let (_, item, seg, d) = best?;
+        let Some(Geom::Contour(c)) = self.item(item).map(|i| &i.geom) else {
+            return None;
+        };
+        let (seg, result) = if extend {
+            let start = c.closest(p).0 < c.length() / 2.0;
+            let (end, seg) = if start {
+                (trim::End::Start, 0)
+            } else {
+                (trim::End::End, c.segments.len() - 1)
+            };
+            let limits = self.limit_segments((u64::MAX, 0));
+            (
+                seg,
+                trim::extend(c, end, &limits).map(|(n, a)| (a, vec![n])),
+            )
+        } else {
+            let limits = self.limit_segments((item, seg));
+            (
+                seg,
+                trim::trim(c, seg, d, &limits).map(|t| (t.removed, t.parts)),
+            )
+        };
+        let (piece, parts) = match result {
+            Some((a, parts)) => (Some(a), parts),
+            None => (None, Vec::new()),
+        };
+        Some(TrimHover {
+            item,
+            seg,
+            piece,
+            parts,
+        })
+    }
+
+    /// Click of Trim/Extend: no pick -> nothing; pick without result -> one Warning; else the item is changed.
+    pub fn trim_click(&mut self, p: Point, tol: f64) {
+        let Some(h) = self.trim_hover(p, tol) else {
+            return;
+        };
+        if h.piece.is_none() {
+            let text = if self.tool == CanvasTool::Trim {
+                "Nothing to trim here"
+            } else {
+                "No limit in that direction"
+            };
+            self.msg(Severity::Warning, text);
+        } else {
+            self.apply_parts(h.item, h.parts);
+        }
+    }
+
+    /// parts[0] replaces item `id`'s contour; parts[1] (if any) becomes a new item next to it; manual tabs follow
+    /// their points (those on a removed piece are dropped).
+    fn apply_parts(&mut self, id: u64, parts: Vec<Contour>) {
+        // undo restores next_id but not trim_limits: drop ids that no longer exist so a reused id is no limit
+        let items = &self.project.items;
+        self.trim_limits
+            .retain(|&i| items.iter().any(|it| it.id == i));
+        let Some(item) = self.project.items.iter_mut().find(|i| i.id == id) else {
+            return;
+        };
+        let Geom::Contour(old) = std::mem::replace(&mut item.geom, Geom::Contour(parts[0].clone()))
+        else {
+            return;
+        };
+        let new = parts
+            .get(1)
+            .and_then(|c| self.project.split_item(id, Geom::Contour(c.clone())));
+        if let Some(n) = new {
+            if self.trim_limits.contains(&id) {
+                self.trim_limits.push(n);
+                self.selection.insert(n);
+            }
+        }
+        let old_len = old.length();
+        for op in &mut self.project.operations {
+            let Some(k) = op.tabs.manual.iter().position(|m| m.item == id) else {
+                continue;
+            };
+            let mut pos: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+            for t in &op.tabs.manual[k].positions {
+                let at = old.point_at(t.rem_euclid(1.0) * old_len);
+                for (j, part) in parts.iter().enumerate() {
+                    let (s, dist) = part.closest(at);
+                    if dist <= TRIM_TOL && j < 2 {
+                        pos[j].push((s / part.length()).rem_euclid(1.0));
+                        break;
+                    }
+                }
+            }
+            let [first, second] = pos;
+            if first.is_empty() {
+                op.tabs.manual.remove(k);
+            } else {
+                op.tabs.manual[k].positions = first;
+            }
+            if let (Some(n), false) = (new, second.is_empty()) {
+                op.tabs.manual.push(hc_project::ManualTabs {
+                    item: n,
+                    positions: second,
+                });
+            }
+        }
+        self.selected_tab = None; // tab indices may have moved or been dropped
+        self.items_changed();
+        self.dirty = true;
     }
 
     /// Nearest joint (`fillet::joints`) of a visible contour item within `tol` of `p` (first item wins ties),

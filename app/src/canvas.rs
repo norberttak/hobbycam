@@ -122,6 +122,8 @@ fn input(app: &mut App, ui: &Ui, resp: &egui::Response) {
                 let w = s.view.screen_to_world(rect, p);
                 if s.tool == CanvasTool::Fillet {
                     s.fillet_click(w, SNAP_PX / zoom);
+                } else if matches!(s.tool, CanvasTool::Trim | CanvasTool::Extend) {
+                    s.trim_click(w, SNAP_PX / zoom);
                 } else {
                     s.snapped_click(w);
                 }
@@ -520,6 +522,55 @@ fn tool_overlay(
         }
         return;
     }
+    if matches!(s.tool, CanvasTool::Trim | CanvasTool::Extend) {
+        if let Some(h) = s.trim_hover(cursor, SNAP_PX / v.zoom as f64) {
+            let trim = s.tool == CanvasTool::Trim;
+            let world = match h.piece {
+                Some(Segment::Line { start, end }) => vec![start, end],
+                Some(Segment::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep,
+                }) => tessellate_arc(
+                    center,
+                    radius,
+                    start_angle,
+                    sweep,
+                    ARC_TOL_PX / v.zoom as f64,
+                ),
+                None => Vec::new(),
+            };
+            let pts: Vec<Pos2> = world
+                .into_iter()
+                .map(|p| v.world_to_screen(rect, p))
+                .collect();
+            if trim {
+                painter.add(Shape::line(pts, Stroke::new(3.0, measure_col)));
+            } else {
+                painter.extend(Shape::dashed_line(
+                    &pts,
+                    Stroke::new(1.5, snap_col),
+                    5.0,
+                    4.0,
+                ));
+            }
+            let label = match (trim, h.piece.is_some()) {
+                (true, true) => "Trim",
+                (true, false) => "Nothing to trim",
+                (false, true) => "Extend",
+                (false, false) => "No limit",
+            };
+            snap_label(
+                painter,
+                ui,
+                v.world_to_screen(rect, cursor),
+                label,
+                snap_col,
+            );
+        }
+        return;
+    }
     let snap = s.snap_point(cursor, SNAP_PX / v.zoom as f64);
     let at = snap.map_or(cursor, |sn| sn.p);
     let stroke = Stroke::new(1.0, snap_col);
@@ -555,6 +606,8 @@ fn tool_overlay(
         | CanvasTool::SetOrigin
         | CanvasTool::Text
         | CanvasTool::Fillet
+        | CanvasTool::Trim
+        | CanvasTool::Extend
         | CanvasTool::Measure => return,
     };
     let pts: Vec<Pos2> = world

@@ -218,6 +218,32 @@ impl Project {
         id
     }
 
+    /// Inserts a new item with `geom`, the layer and source of item `id`, right after it in `items`, and inserts the new id
+    /// right after `id` in every operation that lists `id`. None (nothing changed) for an unknown id.
+    pub fn split_item(&mut self, id: u64, geom: Geom) -> Option<u64> {
+        let pos = self.items.iter().position(|i| i.id == id)?;
+        let new = self.take_id();
+        let (layer, source) = (
+            self.items[pos].layer.clone(),
+            self.items[pos].source.clone(),
+        );
+        self.items.insert(
+            pos + 1,
+            Item {
+                id: new,
+                layer,
+                source,
+                geom,
+            },
+        );
+        for op in &mut self.operations {
+            if let Some(k) = op.items.iter().position(|&i| i == id) {
+                op.items.insert(k + 1, new);
+            }
+        }
+        Some(new)
+    }
+
     /// One item per contour and per point; returns the new ids.
     pub fn add_dxf(&mut self, imp: &DxfImport, file: &str) -> Vec<u64> {
         let mut ids = Vec::new();
