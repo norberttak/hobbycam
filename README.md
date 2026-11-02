@@ -22,7 +22,7 @@ cargo run --release -p hobbycam
 ## Documentation
 
 The user manual is in [docs/](docs/) (mdBook: `mdbook serve docs --open`).
-Online: <https://norberttak.github.io/hobbycam/> (published from the first release on).
+Online: <https://norberttak.github.io/hobbycam/>.
 
 ## License
 
