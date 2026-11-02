@@ -11,8 +11,7 @@ HobbyCAM is kept simple on purpose. Things to know:
   [SharedEdge warning](sanity.md#the-item-touches-the-item-the-pocket-treats-them-as-one-wall).
 - **Tabs** are rectangular lifts, on Contour operations only.
 - **DXF**: ASCII DXF from R12 to 2018. No HATCH, dimensions, text entities or binary DXF. Layers that are switched
-  off in the CAD program are imported anyway. Tested with AutoCAD 2018 files only; **QCAD files are untested** so far,
-  please report problems.
-- No machine travel limits, no clamp collision check, no multi-line text. Drawn shapes cannot be edited after you
-  create them.
+  off in the CAD program are imported anyway. Tested with AutoCAD 2018 and QCAD files.
+- No machine travel limits, no clamp collision check, no multi-line text. The words of a text cannot be changed
+  after you place it (delete it and add a new one).
 - **LinuxCNC only**; no other controllers.

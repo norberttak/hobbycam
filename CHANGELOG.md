@@ -3,7 +3,7 @@
 All notable changes to HobbyCAM are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.3.0] - YYYY-MM-DD
+## [0.3.0] - 2026-11-02
 
 ### Added
 - Measure tool: shows the distance, ΔX, ΔY and angle between two snapped points (temporary, not saved).
@@ -15,6 +15,7 @@ All notable changes to HobbyCAM are listed here. The format follows
 
 ### Changed
 - The sidebar now runs down to the status bar; the Simulation and Issues panels sit right of it.
+- QCAD drawings are tested; the manual no longer lists them as untested.
 
 ## [0.2.0] - 2026-10-28
 
