@@ -222,8 +222,8 @@ pub fn generate_op(project: &Project, op: &Operation) -> Result<Toolpath, Toolpa
         .iter()
         .find(|t| t.id == op.tool)
         .ok_or(ToolpathError::MissingTool(op.tool))?;
-    let needs_radius = matches!(op.kind, OpKind::Contour { .. } | OpKind::Pocket { .. });
-    if needs_radius && (!tool.diameter.is_finite() || tool.diameter <= 0.0) {
+    // every op: drill and engrave G-code ignore it, but a 0 mm tool is a typo the check must catch
+    if !tool.diameter.is_finite() || tool.diameter <= 0.0 {
         return Err(ToolpathError::InvalidParam("diameter"));
     }
     if op.items.is_empty() {
