@@ -861,22 +861,24 @@ fn validation_never_panics() {
             "{so}"
         );
     }
-    // tool diameter: Contour/Pocket reject, Engrave/Drill don't care
-    for d in [0.0, -6.0, f64::NAN] {
+    // tool diameter: every op rejects it, including Engrave and Drill (whose G-code does not use it)
+    let hole = add_c(&mut base, circle(5.0, 5.0, 2.0));
+    for d in [0.0, -6.0, f64::NAN, f64::INFINITY] {
         let mut pr = base.clone();
         pr.tools[0].diameter = d;
-        let c = add_op(&mut pr, ck(Side::Inside, Direction::Climb), vec![sq]);
-        let pk = add_op(&mut pr, OpKind::Pocket { stepover_pct: 50.0 }, vec![sq]);
-        let e = add_op(&mut pr, OpKind::Engrave, vec![sq]);
-        assert!(
-            matches!(run(&pr, c), Err(ToolpathError::InvalidParam(_))),
-            "{d}"
-        );
-        assert!(
-            matches!(run(&pr, pk), Err(ToolpathError::InvalidParam(_))),
-            "{d}"
-        );
-        assert!(run(&pr, e).is_ok(), "{d}");
+        let ops = [
+            add_op(&mut pr, ck(Side::Inside, Direction::Climb), vec![sq]),
+            add_op(&mut pr, OpKind::Pocket { stepover_pct: 50.0 }, vec![sq]),
+            add_op(&mut pr, OpKind::Engrave, vec![sq]),
+            add_op(&mut pr, OpKind::Drill { peck: None }, vec![hole]),
+        ];
+        for op in ops {
+            assert_eq!(
+                run(&pr, op),
+                Err(ToolpathError::InvalidParam("diameter")),
+                "{d}"
+            );
+        }
     }
 }
 

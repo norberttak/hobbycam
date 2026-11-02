@@ -3,6 +3,12 @@
 All notable changes to HobbyCAM are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- A tool diameter of 0 or less is an "Invalid value" error for drill and engrave operations too (it was only checked
+  for contour and pocket).
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
